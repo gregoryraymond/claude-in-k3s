@@ -1,4 +1,5 @@
 use crate::error::{AppResult, CmdResult};
+use chrono::{DateTime, Utc};
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -15,6 +16,37 @@ pub struct PodStatus {
 pub struct KubectlRunner {
     binary: String,
     namespace: String,
+}
+
+fn format_age(timestamp: &str) -> String {
+    let parsed = timestamp
+        .parse::<DateTime<Utc>>()
+        .or_else(|_| DateTime::parse_from_rfc3339(timestamp).map(|dt| dt.with_timezone(&Utc)));
+
+    match parsed {
+        Ok(created) => {
+            let duration = Utc::now() - created;
+            let total_minutes = duration.num_minutes();
+
+            if total_minutes < 1 {
+                "< 1m".to_string()
+            } else if total_minutes < 60 {
+                format!("{}m", total_minutes)
+            } else {
+                let hours = duration.num_hours();
+                let days = hours / 24;
+                let remaining_hours = hours % 24;
+                let remaining_minutes = total_minutes % 60;
+
+                if days > 0 {
+                    format!("{}d {}h", days, remaining_hours)
+                } else {
+                    format!("{}h {}m", hours, remaining_minutes)
+                }
+            }
+        }
+        Err(_) => "unknown".to_string(),
+    }
 }
 
 impl KubectlRunner {
@@ -86,10 +118,11 @@ impl KubectlRunner {
                     })
                     .unwrap_or((false, 0));
 
-                let age = item["metadata"]["creationTimestamp"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let age = format_age(
+                    item["metadata"]["creationTimestamp"]
+                        .as_str()
+                        .unwrap_or(""),
+                );
 
                 pods.push(PodStatus {
                     name,
@@ -227,14 +260,14 @@ ENDJSON
         assert_eq!(pods[0].phase, "Running");
         assert!(pods[0].ready);
         assert_eq!(pods[0].restart_count, 2);
-        assert_eq!(pods[0].age, "2025-01-15T10:30:00Z");
+        assert!(!pods[0].age.is_empty() && pods[0].age != "2025-01-15T10:30:00Z");
 
         assert_eq!(pods[1].name, "claude-pod-2");
         assert_eq!(pods[1].project, "other-project");
         assert_eq!(pods[1].phase, "Pending");
         assert!(!pods[1].ready);
         assert_eq!(pods[1].restart_count, 0);
-        assert_eq!(pods[1].age, "2025-01-16T08:00:00Z");
+        assert!(!pods[1].age.is_empty() && pods[1].age != "2025-01-16T08:00:00Z");
     }
 
     #[tokio::test]
@@ -299,7 +332,7 @@ ENDJSON
         assert_eq!(pods[0].phase, "Running");
         assert!(!pods[0].ready);
         assert_eq!(pods[0].restart_count, 0);
-        assert_eq!(pods[0].age, "");
+        assert_eq!(pods[0].age, "unknown");
     }
 
     #[tokio::test]
@@ -338,7 +371,7 @@ ENDJSON
         assert_eq!(pods[0].phase, "Pending");
         assert!(!pods[0].ready);
         assert_eq!(pods[0].restart_count, 0);
-        assert_eq!(pods[0].age, "2025-02-01T12:00:00Z");
+        assert!(!pods[0].age.is_empty() && pods[0].age != "2025-02-01T12:00:00Z");
     }
 
     #[tokio::test]
@@ -449,5 +482,51 @@ ENDJSON
         assert_eq!(pod.ready, cloned.ready);
         assert_eq!(pod.restart_count, cloned.restart_count);
         assert_eq!(pod.age, cloned.age);
+    }
+
+    #[test]
+    fn format_age_days_and_hours() {
+        let now = chrono::Utc::now();
+        let ts = now - chrono::Duration::hours(51); // 2d 3h
+        let formatted = format_age(&ts.to_rfc3339());
+        assert!(formatted.contains("2d"), "expected '2d' in '{}'", formatted);
+        assert!(formatted.contains("3h"), "expected '3h' in '{}'", formatted);
+    }
+
+    #[test]
+    fn format_age_hours_and_minutes() {
+        let now = chrono::Utc::now();
+        let ts = now - chrono::Duration::minutes(135); // 2h 15m
+        let formatted = format_age(&ts.to_rfc3339());
+        assert!(formatted.contains("2h"), "expected '2h' in '{}'", formatted);
+        assert!(formatted.contains("15m"), "expected '15m' in '{}'", formatted);
+    }
+
+    #[test]
+    fn format_age_minutes_only() {
+        let now = chrono::Utc::now();
+        let ts = now - chrono::Duration::minutes(45);
+        let formatted = format_age(&ts.to_rfc3339());
+        assert_eq!(formatted, "45m");
+    }
+
+    #[test]
+    fn format_age_less_than_one_minute() {
+        let now = chrono::Utc::now();
+        let ts = now - chrono::Duration::seconds(30);
+        let formatted = format_age(&ts.to_rfc3339());
+        assert_eq!(formatted, "< 1m");
+    }
+
+    #[test]
+    fn format_age_invalid_timestamp() {
+        let formatted = format_age("not-a-timestamp");
+        assert_eq!(formatted, "unknown");
+    }
+
+    #[test]
+    fn format_age_empty_string() {
+        let formatted = format_age("");
+        assert_eq!(formatted, "unknown");
     }
 }
