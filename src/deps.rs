@@ -1,5 +1,6 @@
 use crate::platform::{self, Platform};
 use std::process::Command;
+use tokio::process::Command as AsyncCommand;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolStatus {
@@ -71,6 +72,130 @@ pub fn check_all(platform: &Platform) -> DepsStatus {
     }
 }
 
+/// URL for downloading terraform binary
+pub fn terraform_download_url(arch: &str) -> String {
+    let arch_suffix = match arch {
+        "aarch64" => "linux_arm64",
+        _ => "linux_amd64",
+    };
+    format!(
+        "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_{}.zip",
+        arch_suffix
+    )
+}
+
+/// URL for downloading helm binary
+pub fn helm_download_url(arch: &str) -> String {
+    let arch_suffix = match arch {
+        "aarch64" => "linux-arm64",
+        _ => "linux-amd64",
+    };
+    format!(
+        "https://get.helm.sh/helm-v3.16.4-{}.tar.gz",
+        arch_suffix
+    )
+}
+
+/// Install terraform by downloading the binary to ~/.local/bin/
+pub async fn install_terraform() -> Result<String, String> {
+    let arch = crate::platform::detect_arch();
+    let url = terraform_download_url(arch);
+    let install_dir = local_bin_dir()?;
+    ensure_dir(&install_dir)?;
+
+    let tmp_dir = std::env::temp_dir().join("claude-k3s-terraform-install");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("mkdir failed: {}", e))?;
+
+    let zip_path = tmp_dir.join("terraform.zip");
+
+    run_async(&format!("curl -fsSL -o {} {}", zip_path.display(), url)).await?;
+    run_async(&format!("unzip -o {} -d {}", zip_path.display(), tmp_dir.display())).await?;
+
+    let src = tmp_dir.join("terraform");
+    let dst = install_dir.join("terraform");
+    std::fs::copy(&src, &dst).map_err(|e| format!("copy failed: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod failed: {}", e))?;
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    Ok(format!("Terraform installed to {}", dst.display()))
+}
+
+/// Install helm by downloading the binary to ~/.local/bin/
+pub async fn install_helm() -> Result<String, String> {
+    let arch = crate::platform::detect_arch();
+    let url = helm_download_url(arch);
+    let install_dir = local_bin_dir()?;
+    ensure_dir(&install_dir)?;
+
+    let tmp_dir = std::env::temp_dir().join("claude-k3s-helm-install");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("mkdir failed: {}", e))?;
+
+    let tar_path = tmp_dir.join("helm.tar.gz");
+
+    run_async(&format!("curl -fsSL -o {} {}", tar_path.display(), url)).await?;
+    run_async(&format!("tar xzf {} -C {}", tar_path.display(), tmp_dir.display())).await?;
+
+    let arch_dir = if arch == "aarch64" { "linux-arm64" } else { "linux-amd64" };
+    let src = tmp_dir.join(arch_dir).join("helm");
+    let dst = install_dir.join("helm");
+    std::fs::copy(&src, &dst).map_err(|e| format!("copy failed: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod failed: {}", e))?;
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    Ok(format!("Helm installed to {}", dst.display()))
+}
+
+/// Install k3s using the official install script (requires sudo)
+pub async fn install_k3s() -> Result<String, String> {
+    run_async("curl -sfL https://get.k3s.io | sudo sh -").await
+}
+
+/// Install docker using the official install script (requires sudo)
+pub async fn install_docker() -> Result<String, String> {
+    run_async("curl -fsSL https://get.docker.com | sudo sh").await
+}
+
+fn local_bin_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    Ok(home.join(".local").join("bin"))
+}
+
+fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| format!("Failed to create {}: {}", path.display(), e))
+}
+
+async fn run_async(cmd: &str) -> Result<String, String> {
+    let output = AsyncCommand::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run '{}': {}", cmd, e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(if stdout.is_empty() { stderr } else { stdout })
+    } else {
+        Err(format!("Command failed: {}\n{}", cmd, stderr))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +250,33 @@ mod tests {
         let _ = status.terraform;
         let _ = status.helm;
         let _ = status.docker;
+    }
+
+    #[test]
+    fn terraform_download_url_x86_64() {
+        let url = terraform_download_url("x86_64");
+        assert!(url.contains("terraform"));
+        assert!(url.contains("linux_amd64"));
+    }
+
+    #[test]
+    fn terraform_download_url_aarch64() {
+        let url = terraform_download_url("aarch64");
+        assert!(url.contains("terraform"));
+        assert!(url.contains("linux_arm64"));
+    }
+
+    #[test]
+    fn helm_download_url_x86_64() {
+        let url = helm_download_url("x86_64");
+        assert!(url.contains("helm"));
+        assert!(url.contains("linux-amd64"));
+    }
+
+    #[test]
+    fn helm_download_url_aarch64() {
+        let url = helm_download_url("aarch64");
+        assert!(url.contains("helm"));
+        assert!(url.contains("linux-arm64"));
     }
 }
