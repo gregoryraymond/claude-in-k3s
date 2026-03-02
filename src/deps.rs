@@ -65,7 +65,7 @@ pub fn check_tool(binary: &str) -> ToolStatus {
 /// Check all 4 required tools for the given platform.
 pub fn check_all(platform: &Platform) -> DepsStatus {
     DepsStatus {
-        k3s: check_tool("k3s"),
+        k3s: check_tool(platform::k8s_provider_binary(platform)),
         terraform: check_tool(platform::terraform_binary(platform)),
         helm: check_tool(platform::helm_binary(platform)),
         docker: check_tool(platform::docker_binary(platform)),
@@ -192,17 +192,38 @@ pub async fn install_helm() -> Result<String, String> {
     Ok(format!("Helm installed to {}", dst.display()))
 }
 
-/// Install k3s using the official install script (requires sudo)
+/// URL for downloading k3d binary (used on Windows where k3s can't run natively)
+pub fn k3d_download_url(arch: &str) -> String {
+    let arch_suffix = match arch {
+        "aarch64" => "arm64",
+        _ => "amd64",
+    };
+    format!(
+        "https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-windows-{}.exe",
+        arch_suffix
+    )
+}
+
+/// Install k3s (Linux/macOS/WSL2) or k3d (Windows).
 pub async fn install_k3s() -> Result<String, String> {
     let platform = crate::platform::detect_platform();
     match platform {
-        Platform::Windows => Err(
-            "k3s cannot be installed directly on Windows. \
-             Please use WSL2 or a Linux VM."
-                .to_string(),
-        ),
+        Platform::Windows => install_k3d().await,
         _ => run_async("curl -sfL https://get.k3s.io | sudo sh -").await,
     }
+}
+
+/// Install k3d by downloading the binary to ~/.local/bin/ (Windows)
+async fn install_k3d() -> Result<String, String> {
+    let arch = crate::platform::detect_arch();
+    let url = k3d_download_url(arch);
+    let install_dir = local_bin_dir()?;
+    ensure_dir(&install_dir)?;
+
+    let dst = install_dir.join("k3d.exe");
+    run_async(&format!("curl -fsSL -o {} {}", shell_path(&dst), url)).await?;
+
+    Ok(format!("k3d installed to {}", dst.display()))
 }
 
 /// Install docker using the official install script (requires sudo)
@@ -348,6 +369,18 @@ mod tests {
         let url = helm_download_url("x86_64", &Platform::Windows);
         assert!(url.contains("windows-amd64"));
         assert!(url.ends_with(".zip"));
+    }
+
+    #[test]
+    fn k3d_download_url_x86_64() {
+        let url = k3d_download_url("x86_64");
+        assert!(url.contains("k3d-windows-amd64.exe"));
+    }
+
+    #[test]
+    fn k3d_download_url_aarch64() {
+        let url = k3d_download_url("aarch64");
+        assert!(url.contains("k3d-windows-arm64.exe"));
     }
 
     #[test]

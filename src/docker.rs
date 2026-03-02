@@ -271,6 +271,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn build_preset_with_mock() {
         let mock_dir = TempDir::new().unwrap();
@@ -303,6 +304,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn build_preset_failure_with_mock() {
         let mock_dir = TempDir::new().unwrap();
@@ -336,6 +338,7 @@ mod tests {
 
     // ── build_and_import: skips import when build fails ──────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn build_and_import_skips_import_on_build_failure() {
         // The mock docker binary always fails with exit 1.

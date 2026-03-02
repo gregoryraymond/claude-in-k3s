@@ -62,6 +62,23 @@ pub fn docker_binary(platform: &Platform) -> &'static str {
     }
 }
 
+/// Returns the binary name for the k8s cluster provider:
+/// k3d on Windows (runs k3s inside Docker), k3s elsewhere.
+pub fn k8s_provider_binary(platform: &Platform) -> &'static str {
+    match platform {
+        Platform::Windows => "k3d.exe",
+        _ => "k3s",
+    }
+}
+
+/// Display name for the k8s cluster provider (for UI labels and logs).
+pub fn k8s_provider_name(platform: &Platform) -> &'static str {
+    match platform {
+        Platform::Windows => "k3d",
+        _ => "k3s",
+    }
+}
+
 pub fn platform_display_name(platform: &Platform) -> &'static str {
     match platform {
         Platform::Linux => "Linux",
@@ -173,5 +190,25 @@ mod tests {
             "unexpected arch: {}",
             arch
         );
+    }
+
+    #[test]
+    fn k8s_provider_binary_linux() {
+        assert_eq!(k8s_provider_binary(&Platform::Linux), "k3s");
+    }
+
+    #[test]
+    fn k8s_provider_binary_windows() {
+        assert_eq!(k8s_provider_binary(&Platform::Windows), "k3d.exe");
+    }
+
+    #[test]
+    fn k8s_provider_name_linux() {
+        assert_eq!(k8s_provider_name(&Platform::Linux), "k3s");
+    }
+
+    #[test]
+    fn k8s_provider_name_windows() {
+        assert_eq!(k8s_provider_name(&Platform::Windows), "k3d");
     }
 }

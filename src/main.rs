@@ -54,6 +54,7 @@ fn main() -> anyhow::Result<()> {
         let s = state.lock().unwrap();
         let deps = &s.deps_status;
         ui.set_all_deps_met(deps.all_met());
+        ui.set_k3s_label(platform::k8s_provider_name(&s.platform).into());
 
         if let deps::ToolStatus::Found { ref version } = deps.k3s {
             ui.set_k3s_found(true);
@@ -716,10 +717,11 @@ fn main() -> anyhow::Result<()> {
             }
 
             rt_handle.spawn(async move {
-                let deps = {
+                let (deps, current_platform) = {
                     let s = state.lock().unwrap();
-                    s.deps_status.clone()
+                    (s.deps_status.clone(), s.platform.clone())
                 };
+                let k8s_name = platform::k8s_provider_name(&current_platform);
 
                 let mut log = String::from("Starting installation of missing dependencies...\n");
 
@@ -744,8 +746,10 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 if !deps.k3s.is_found() {
-                    log.push_str("\n--- Installing k3s ---\n");
-                    log.push_str("(This requires sudo)\n");
+                    log.push_str(&format!("\n--- Installing {} ---\n", k8s_name));
+                    if !matches!(current_platform, platform::Platform::Windows) {
+                        log.push_str("(This requires sudo)\n");
+                    }
                     update_install_log(&ui, &log);
                     match deps::install_k3s().await {
                         Ok(msg) => log.push_str(&format!("OK: {}\n", msg)),
