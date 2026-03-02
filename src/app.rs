@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::deps::{self, DepsStatus};
 use crate::docker::DockerBuilder;
 use crate::error::AppResult;
 use crate::helm::HelmRunner;
@@ -16,6 +17,8 @@ pub struct AppState {
     pub pods: Vec<PodStatus>,
     pub cluster_healthy: bool,
     pub tf_initialized: bool,
+    #[allow(dead_code)] // used by upcoming SetupPanel UI wiring
+    pub deps_status: DepsStatus,
     pub log_buffer: String,
     project_root: PathBuf,
 }
@@ -24,6 +27,7 @@ impl AppState {
     pub fn new() -> AppResult<Self> {
         let config = AppConfig::load()?;
         let plat = platform::detect_platform();
+        let deps_status = deps::check_all(&plat);
 
         let project_root = std::env::current_exe()
             .ok()
@@ -40,6 +44,7 @@ impl AppState {
             pods: vec![],
             cluster_healthy: false,
             tf_initialized: false,
+            deps_status,
             log_buffer: String::new(),
             project_root,
         })
@@ -136,6 +141,12 @@ mod tests {
             pods: vec![],
             cluster_healthy: false,
             tf_initialized: false,
+            deps_status: crate::deps::DepsStatus {
+                k3s: crate::deps::ToolStatus::Missing,
+                terraform: crate::deps::ToolStatus::Missing,
+                helm: crate::deps::ToolStatus::Missing,
+                docker: crate::deps::ToolStatus::Missing,
+            },
             log_buffer: String::new(),
             project_root: PathBuf::from("/tmp/test-root"),
         }
@@ -229,6 +240,13 @@ mod tests {
         assert!(state.log_buffer.is_empty());
         assert!(state.projects.is_empty());
         assert!(state.pods.is_empty());
+    }
+
+    #[test]
+    fn initial_state_has_deps_status() {
+        let state = make_state();
+        // Verify deps_status field exists and is accessible
+        let _ = state.deps_status.all_met();
     }
 
     #[test]
