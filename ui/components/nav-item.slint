@@ -6,7 +6,7 @@ export component NavItem inherits Rectangle {
     in property <bool> active: false;
     callback clicked();
 
-    private property <bool> hovered: false;
+    private property <bool> hovered: ta.has-hover;
 
     height: 44px;
 
@@ -51,9 +51,8 @@ export component NavItem inherits Rectangle {
         }
     }
 
-    TouchArea {
+    ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
-        moved => { root.hovered = self.has-hover; }
     }
 }

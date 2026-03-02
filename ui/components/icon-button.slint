@@ -7,8 +7,8 @@ export component IconButton inherits Rectangle {
     in property <bool> destructive: false;
     callback clicked();
 
-    private property <bool> hovered: false;
-    private property <bool> pressed: false;
+    private property <bool> hovered: ta.has-hover && root.enabled;
+    private property <bool> pressed: ta.pressed && root.enabled;
 
     height: 34px;
     min-width: 72px;
@@ -24,7 +24,7 @@ export component IconButton inherits Rectangle {
             return Theme.accent;
         }
         if destructive && (hovered || pressed) {
-            if pressed { return #d94040; }
+            if pressed { return Theme.destructive-press; }
             return Theme.error;
         }
         if pressed { return Theme.border; }
@@ -53,18 +53,10 @@ export component IconButton inherits Rectangle {
         }
     }
 
-    TouchArea {
+    ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             if root.enabled { root.clicked(); }
-        }
-        moved => {
-            root.hovered = self.has-hover && root.enabled;
-            root.pressed = self.pressed && root.enabled;
-        }
-        pointer-event(event) => {
-            root.hovered = self.has-hover && root.enabled;
-            root.pressed = self.pressed && root.enabled;
         }
     }
 }
