@@ -83,7 +83,6 @@ impl HelmRunner {
         .await
     }
 
-    #[allow(dead_code)]
     pub async fn status(&self) -> AppResult<CmdResult> {
         self.run(&[
             "status",

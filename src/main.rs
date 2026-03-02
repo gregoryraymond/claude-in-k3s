@@ -163,6 +163,40 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_terraform_plan(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+            set_busy(&ui, true);
+            append_log(&state, "Running terraform plan...");
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                let runner = {
+                    let s = state.lock().unwrap();
+                    s.terraform_runner()
+                };
+                let result = runner.plan().await;
+
+                slint::invoke_from_event_loop(move || {
+                    match result {
+                        Ok(r) => {
+                            append_log(&state, &format_cmd_result("terraform plan", &r));
+                        }
+                        Err(e) => append_log(&state, &format!("Error: {}", e)),
+                    }
+                    set_busy(&ui, false);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
     // --- Browse folder ---
     {
         let ui_handle = ui.as_weak();
@@ -361,6 +395,42 @@ fn main() -> anyhow::Result<()> {
                             append_log(&state, &format_cmd_result("helm uninstall", &r));
                         }
                         Err(e) => append_log(&state, &format!("Uninstall error: {}", e)),
+                    }
+                    set_busy(&ui, false);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
+    // --- Helm status ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_helm_status(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+            set_busy(&ui, true);
+            append_log(&state, "Checking Helm release status...");
+            sync_log(&ui, &state);
+
+            let helm_runner = {
+                let s = state.lock().unwrap();
+                s.helm_runner()
+            };
+
+            rt_handle.spawn(async move {
+                let result = helm_runner.status().await;
+
+                slint::invoke_from_event_loop(move || {
+                    match result {
+                        Ok(r) => {
+                            append_log(&state, &format_cmd_result("helm status", &r));
+                        }
+                        Err(e) => append_log(&state, &format!("Helm status error: {}", e)),
                     }
                     set_busy(&ui, false);
                     sync_log(&ui, &state);

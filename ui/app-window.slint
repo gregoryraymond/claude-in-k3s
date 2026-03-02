@@ -33,6 +33,8 @@ export component AppWindow inherits Window {
     callback terraform-init();
     callback terraform-apply();
     callback terraform-destroy();
+    callback terraform-plan();
+    callback helm-status();
 
     // Projects callbacks
     callback browse-folder();
@@ -117,6 +119,8 @@ export component AppWindow inherits Window {
                     terraform-init => { root.terraform-init(); }
                     terraform-apply => { root.terraform-apply(); }
                     terraform-destroy => { root.terraform-destroy(); }
+                    terraform-plan => { root.terraform-plan(); }
+                    helm-status => { root.helm-status(); }
                 }
             }
 

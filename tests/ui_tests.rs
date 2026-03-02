@@ -136,6 +136,8 @@ fn ui_property_defaults() {
     ui.on_refresh_pods(|| {});
     ui.on_delete_pod(|_idx| {});
     ui.on_view_logs(|_idx| {});
+    ui.on_terraform_plan(|| {});
+    ui.on_helm_status(|| {});
     ui.on_save_settings(|| {});
 
     // -- callback invocation with counters --
@@ -162,6 +164,20 @@ fn ui_property_defaults() {
     let c = counter.clone();
     ui.on_terraform_destroy(move || { c.set(c.get() + 1); });
     ui.invoke_terraform_destroy();
+    assert_eq!(counter.get(), 1);
+
+    // terraform_plan
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_terraform_plan(move || { c.set(c.get() + 1); });
+    ui.invoke_terraform_plan();
+    assert_eq!(counter.get(), 1);
+
+    // helm_status
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_helm_status(move || { c.set(c.get() + 1); });
+    ui.invoke_helm_status();
     assert_eq!(counter.get(), 1);
 
     // browse_folder

@@ -44,7 +44,6 @@ impl TerraformRunner {
         self.run(&["destroy", "-auto-approve", "-no-color"]).await
     }
 
-    #[allow(dead_code)]
     pub async fn plan(&self) -> AppResult<CmdResult> {
         self.run(&["plan", "-no-color"]).await
     }

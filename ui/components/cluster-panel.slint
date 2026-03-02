@@ -9,6 +9,8 @@ export component ClusterPanel inherits VerticalBox {
     callback terraform-init();
     callback terraform-apply();
     callback terraform-destroy();
+    callback terraform-plan();
+    callback helm-status();
 
     padding: 16px;
     spacing: 12px;
@@ -63,6 +65,27 @@ export component ClusterPanel inherits VerticalBox {
                 text: "Destroy";
                 enabled: !is-busy && tf-initialized;
                 clicked => { terraform-destroy(); }
+            }
+
+            Button {
+                text: "Plan";
+                enabled: !is-busy && tf-initialized;
+                clicked => { terraform-plan(); }
+            }
+        }
+    }
+
+    GroupBox {
+        title: "Helm Release";
+
+        HorizontalBox {
+            spacing: 8px;
+            alignment: start;
+
+            Button {
+                text: "Status";
+                enabled: !is-busy;
+                clicked => { helm-status(); }
             }
         }
     }
