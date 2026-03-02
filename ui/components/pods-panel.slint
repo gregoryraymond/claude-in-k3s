@@ -1,4 +1,4 @@
-import { Button, GroupBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { Button, GroupBox, VerticalBox, HorizontalBox, ScrollView, LineEdit } from "std-widgets.slint";
 
 export struct PodEntry {
     name: string,
@@ -16,6 +16,10 @@ export component PodsPanel inherits VerticalBox {
     callback refresh-pods();
     callback delete-pod(int);
     callback view-logs(int);
+    callback exec-claude(int);
+    callback send-prompt(string);
+    in-out property <string> claude-prompt: "";
+    in property <string> claude-target-pod: "";
 
     padding: 16px;
     spacing: 12px;
@@ -128,12 +132,43 @@ export component PodsPanel inherits VerticalBox {
                     }
 
                     Button {
+                        text: "Claude";
+                        height: 28px;
+                        clicked => { exec-claude(idx); }
+                    }
+
+                    Button {
                         text: "Delete";
                         height: 28px;
                         clicked => { delete-pod(idx); }
                     }
                 }
             }
+        }
+    }
+
+    // Claude prompt input (visible when a target pod is selected)
+    if claude-target-pod != "": HorizontalBox {
+        spacing: 8px;
+        height: 36px;
+
+        Text {
+            text: "Prompt for " + claude-target-pod + ":";
+            font-size: 12px;
+            vertical-alignment: center;
+            color: #666;
+        }
+
+        LineEdit {
+            text <=> claude-prompt;
+            placeholder-text: "Enter a prompt for Claude...";
+            horizontal-stretch: 1;
+        }
+
+        Button {
+            text: "Send";
+            enabled: claude-prompt != "";
+            clicked => { send-prompt(claude-prompt); }
         }
     }
 

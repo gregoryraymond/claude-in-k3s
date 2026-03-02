@@ -25,6 +25,10 @@ export component AppWindow inherits Window {
     // Pods state
     in property <[PodEntry]> pods: [];
 
+    // Claude exec state
+    in-out property <string> claude-prompt: "";
+    in property <string> claude-target-pod: "";
+
     // Settings state
     in-out property <string> api-key: "";
     in property <string> platform-name: "Linux";
@@ -57,6 +61,8 @@ export component AppWindow inherits Window {
     callback refresh-pods();
     callback delete-pod(int);
     callback view-logs(int);
+    callback exec-claude(int);
+    callback send-prompt(string);
 
     // Settings callbacks
     callback save-settings();
@@ -160,6 +166,10 @@ export component AppWindow inherits Window {
                     refresh-pods => { root.refresh-pods(); }
                     delete-pod(idx) => { root.delete-pod(idx); }
                     view-logs(idx) => { root.view-logs(idx); }
+                    exec-claude(idx) => { root.exec-claude(idx); }
+                    send-prompt(prompt) => { root.send-prompt(prompt); }
+                    claude-prompt <=> root.claude-prompt;
+                    claude-target-pod: root.claude-target-pod;
                 }
             }
 

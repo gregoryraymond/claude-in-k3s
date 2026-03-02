@@ -138,7 +138,6 @@ impl KubectlRunner {
         Ok(pods)
     }
 
-    #[allow(dead_code)]
     pub async fn exec_claude(&self, pod_name: &str, prompt: &str) -> AppResult<CmdResult> {
         self.run(&[
             "exec",

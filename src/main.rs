@@ -572,6 +572,84 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
+    // --- Exec Claude ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+
+        ui.on_exec_claude(move |idx| {
+            let s = state.lock().unwrap();
+            let pod_name = s
+                .pods
+                .get(idx as usize)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_claude_target_pod(pod_name.into());
+                ui.set_claude_prompt("".into());
+            }
+        });
+    }
+
+    // --- Send prompt ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_send_prompt(move |prompt| {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+            let prompt = prompt.to_string();
+
+            let (kubectl, pod_name) = {
+                let s = state.lock().unwrap();
+                let pod_name = if let Some(u) = ui.upgrade() {
+                    u.get_claude_target_pod().to_string()
+                } else {
+                    String::new()
+                };
+                (s.kubectl_runner(), pod_name)
+            };
+
+            if pod_name.is_empty() {
+                return;
+            }
+
+            set_busy(&ui, true);
+            append_log(&state, &format!("Sending prompt to pod {}...", pod_name));
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                let result = kubectl.exec_claude(&pod_name, &prompt).await;
+
+                slint::invoke_from_event_loop(move || {
+                    match result {
+                        Ok(r) => {
+                            append_log(
+                                &state,
+                                &format!("--- Claude response from {} ---\n{}", pod_name, r.stdout),
+                            );
+                            if !r.stderr.is_empty() {
+                                append_log(&state, &format!("STDERR: {}", r.stderr.trim()));
+                            }
+                        }
+                        Err(e) => append_log(&state, &format!("Claude exec error: {}", e)),
+                    }
+                    // Clear prompt and target after sending
+                    if let Some(ui) = ui.upgrade() {
+                        ui.set_claude_prompt("".into());
+                        ui.set_claude_target_pod("".into());
+                    }
+                    set_busy(&ui, false);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
     // --- Save settings ---
     {
         let ui_handle = ui.as_weak();

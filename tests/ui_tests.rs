@@ -31,6 +31,9 @@ fn ui_property_defaults() {
     assert_eq!(ui.get_terraform_dir(), "terraform");
     assert_eq!(ui.get_helm_chart_dir(), "helm/claude-code");
 
+    assert_eq!(ui.get_claude_prompt(), "");
+    assert_eq!(ui.get_claude_target_pod(), "");
+
     // -- set/get cluster status --
     ui.set_cluster_status("Healthy".into());
     assert_eq!(ui.get_cluster_status(), "Healthy");
@@ -80,6 +83,11 @@ fn ui_property_defaults() {
     assert_eq!(ui.get_terraform_dir(), "custom-tf");
     ui.set_helm_chart_dir("custom-helm".into());
     assert_eq!(ui.get_helm_chart_dir(), "custom-helm");
+
+    ui.set_claude_prompt("test prompt".into());
+    assert_eq!(ui.get_claude_prompt(), "test prompt");
+    ui.set_claude_target_pod("my-pod-123".into());
+    assert_eq!(ui.get_claude_target_pod(), "my-pod-123");
 
     // -- projects model empty by default --
     // (reset to check model defaults on a fresh window isn't possible,
@@ -164,6 +172,8 @@ fn ui_property_defaults() {
     ui.on_terraform_plan(|| {});
     ui.on_helm_status(|| {});
     ui.on_save_settings(|| {});
+    ui.on_exec_claude(|_idx| {});
+    ui.on_send_prompt(|_prompt| {});
 
     // -- callback invocation with counters --
     // Note: re-registering callbacks replaces the previous ones
@@ -282,4 +292,18 @@ fn ui_property_defaults() {
     ui.on_view_logs(move |idx| { i.set(idx); });
     ui.invoke_view_logs(4);
     assert_eq!(received_idx.get(), 4);
+
+    // exec_claude
+    let received_idx = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+    let i = received_idx.clone();
+    ui.on_exec_claude(move |idx| { i.set(idx); });
+    ui.invoke_exec_claude(2);
+    assert_eq!(received_idx.get(), 2);
+
+    // send_prompt
+    let received_prompt = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let p = received_prompt.clone();
+    ui.on_send_prompt(move |prompt| { *p.borrow_mut() = prompt.to_string(); });
+    ui.invoke_send_prompt("hello claude".into());
+    assert_eq!(*received_prompt.borrow(), "hello claude");
 }
