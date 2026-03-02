@@ -74,7 +74,22 @@ impl AppState {
         self.project_root.join("docker").to_string_lossy().into()
     }
 
+    /// Write `terraform.auto.tfvars` so Terraform knows the current platform.
+    /// Called automatically before every terraform operation.
+    pub fn write_terraform_vars(&self) -> AppResult<()> {
+        let platform_str = match self.platform {
+            Platform::Linux => "linux",
+            Platform::MacOs => "macos",
+            Platform::Wsl2 => "wsl2",
+            Platform::Windows => "windows",
+        };
+        let vars_path = PathBuf::from(self.terraform_dir()).join("terraform.auto.tfvars");
+        std::fs::write(&vars_path, format!("platform = \"{}\"\n", platform_str))?;
+        Ok(())
+    }
+
     pub fn terraform_runner(&self) -> TerraformRunner {
+        let _ = self.write_terraform_vars();
         TerraformRunner::new(
             platform::terraform_binary(&self.platform),
             &self.terraform_dir(),
@@ -256,5 +271,37 @@ mod tests {
         assert!(root.is_some(), "find_project_root should find Cargo.toml");
         let root = root.unwrap();
         assert!(root.join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn write_terraform_vars_creates_file() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let tf_dir = tmp.path().join("terraform");
+        std::fs::create_dir(&tf_dir).unwrap();
+
+        let mut state = make_state();
+        state.config.terraform_dir = "terraform".to_string();
+        state.project_root = tmp.path().to_path_buf();
+        state.platform = Platform::Windows;
+
+        state.write_terraform_vars().expect("write vars");
+        let content = std::fs::read_to_string(tf_dir.join("terraform.auto.tfvars")).unwrap();
+        assert_eq!(content, "platform = \"windows\"\n");
+    }
+
+    #[test]
+    fn write_terraform_vars_linux() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let tf_dir = tmp.path().join("terraform");
+        std::fs::create_dir(&tf_dir).unwrap();
+
+        let mut state = make_state();
+        state.config.terraform_dir = "terraform".to_string();
+        state.project_root = tmp.path().to_path_buf();
+        state.platform = Platform::Linux;
+
+        state.write_terraform_vars().expect("write vars");
+        let content = std::fs::read_to_string(tf_dir.join("terraform.auto.tfvars")).unwrap();
+        assert_eq!(content, "platform = \"linux\"\n");
     }
 }

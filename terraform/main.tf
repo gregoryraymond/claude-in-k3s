@@ -1,5 +1,6 @@
-# Root module - orchestrates K3s cluster lifecycle
-# Expects k3s to already be installed on the host
+# Root module - orchestrates cluster lifecycle
+# Linux/WSL2/macOS: expects k3s installed on the host
+# Windows: uses k3d (k3s-in-Docker) via Docker Desktop
 
 locals {
   namespace = "claude-code"

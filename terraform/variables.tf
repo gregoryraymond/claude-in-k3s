@@ -21,3 +21,9 @@ variable "manage_service" {
   type        = bool
   default     = true
 }
+
+variable "platform" {
+  description = "Operating system: linux, macos, wsl2, or windows"
+  type        = string
+  default     = "linux"
+}
