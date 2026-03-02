@@ -1,0 +1,68 @@
+import { Theme } from "../theme.slint";
+
+export component IconButton inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> destructive: false;
+    callback clicked();
+
+    private property <bool> hovered: false;
+    private property <bool> pressed: false;
+
+    height: 34px;
+    min-width: 72px;
+    horizontal-stretch: 0;
+    border-radius: 6px;
+    opacity: enabled ? 1.0 : 0.4;
+
+    background: {
+        if !enabled { return Theme.surface-alt; }
+        if primary {
+            if pressed { return Theme.accent-press; }
+            if hovered { return Theme.accent-hover; }
+            return Theme.accent;
+        }
+        if destructive && (hovered || pressed) {
+            if pressed { return #d94040; }
+            return Theme.error;
+        }
+        if pressed { return Theme.border; }
+        if hovered { return Theme.accent; }
+        return Theme.surface-alt;
+    };
+
+    animate background { duration: 150ms; easing: ease-in-out; }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: 13px;
+            font-weight: 500;
+            color: {
+                if !root.enabled { return Theme.text-muted; }
+                if root.primary || root.hovered || root.pressed { return #ffffff; }
+                return Theme.text;
+            };
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled { root.clicked(); }
+        }
+        hovered => {
+            root.hovered = self.has-hover && root.enabled;
+        }
+        pointer-event(event) => {
+            root.pressed = self.pressed && root.enabled;
+        }
+    }
+}

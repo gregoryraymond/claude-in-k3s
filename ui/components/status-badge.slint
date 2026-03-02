@@ -1,0 +1,35 @@
+import { Theme } from "../theme.slint";
+
+export component StatusBadge inherits Rectangle {
+    in property <string> status: "";
+
+    height: 22px;
+    min-width: 64px;
+    horizontal-stretch: 0;
+    border-radius: 10px;
+
+    background: {
+        if status == "Running" || status == "Healthy" || status == "Found" { return Theme.success; }
+        if status == "Pending" || status == "Starting" { return Theme.warning; }
+        if status == "Failed" || status == "Error" || status == "Missing" { return Theme.error; }
+        return Theme.surface-alt;
+    };
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+
+        Text {
+            text: root.status;
+            font-size: 11px;
+            font-weight: 700;
+            color: {
+                if root.status == "Pending" || root.status == "Starting" { return #1a1a2e; }
+                return #ffffff;
+            };
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}

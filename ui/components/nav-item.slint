@@ -1,0 +1,59 @@
+import { Theme } from "../theme.slint";
+
+export component NavItem inherits Rectangle {
+    in property <string> icon: "";
+    in property <string> label: "";
+    in property <bool> active: false;
+    callback clicked();
+
+    private property <bool> hovered: false;
+
+    height: 44px;
+
+    background: {
+        if active { return Theme.nav-active-bg; }
+        if hovered { return Theme.nav-hover-bg; }
+        return transparent;
+    };
+
+    animate background { duration: 120ms; easing: ease-in-out; }
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: active ? 3px : 0px;
+        height: parent.height;
+        background: Theme.accent;
+        animate width { duration: 120ms; easing: ease-in-out; }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+
+        Text {
+            text: root.icon;
+            font-size: 16px;
+            color: root.active ? Theme.accent : Theme.text-muted;
+            vertical-alignment: center;
+            width: 24px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.label;
+            font-size: 13px;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Theme.text : Theme.text-muted;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        moved => { root.hovered = self.has-hover; }
+    }
+}

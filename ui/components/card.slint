@@ -1,0 +1,25 @@
+import { Theme } from "../theme.slint";
+
+export component Card inherits Rectangle {
+    in property <string> title: "";
+
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 8px;
+    clip: true;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        if title != "" : Text {
+            text: title;
+            font-size: 15px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+
+        @children
+    }
+}

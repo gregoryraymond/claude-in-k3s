@@ -1,0 +1,27 @@
+import { Theme } from "../theme.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component FormField inherits VerticalLayout {
+    in property <string> label: "";
+    in property <string> placeholder: "";
+    in property <bool> is-password: false;
+    in property <bool> read-only: false;
+    in-out property <string> text: "";
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        font-size: 12px;
+        font-weight: 500;
+        color: Theme.text-muted;
+    }
+
+    LineEdit {
+        text <=> root.text;
+        placeholder-text: root.placeholder;
+        input-type: root.is-password ? password : text;
+        read-only: root.read-only;
+        font-size: 13px;
+    }
+}

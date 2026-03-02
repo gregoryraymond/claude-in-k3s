@@ -1,0 +1,22 @@
+import { Theme } from "../theme.slint";
+
+export component DataRow inherits Rectangle {
+    in property <bool> alternate: false;
+    private property <bool> hovered: false;
+
+    height: 40px;
+
+    background: {
+        if hovered { return #222240; }
+        if alternate { return Theme.surface-alt; }
+        return transparent;
+    };
+
+    animate background { duration: 100ms; }
+
+    @children
+
+    TouchArea {
+        moved => { root.hovered = self.has-hover; }
+    }
+}
