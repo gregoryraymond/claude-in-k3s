@@ -156,6 +156,34 @@ fn ui_property_defaults() {
     assert!(!pods.row_data(1).unwrap().ready);
     assert_eq!(pods.row_data(1).unwrap().restart_count, 5);
 
+    // -- deps state defaults --
+    assert!(ui.get_all_deps_met());
+    assert!(!ui.get_k3s_found());
+    assert!(!ui.get_terraform_found());
+    assert!(!ui.get_helm_found());
+    assert!(!ui.get_docker_found());
+    assert_eq!(ui.get_k3s_version(), "");
+    assert_eq!(ui.get_terraform_version(), "");
+    assert_eq!(ui.get_helm_version(), "");
+    assert_eq!(ui.get_docker_version(), "");
+    assert_eq!(ui.get_install_log(), "");
+    assert!(!ui.get_is_installing());
+
+    // -- set/get deps state --
+    ui.set_all_deps_met(false);
+    assert!(!ui.get_all_deps_met());
+    ui.set_k3s_found(true);
+    assert!(ui.get_k3s_found());
+    ui.set_k3s_version("v1.28.5+k3s1".into());
+    assert_eq!(ui.get_k3s_version(), "v1.28.5+k3s1");
+    ui.set_install_log("Installing terraform...".into());
+    assert_eq!(ui.get_install_log(), "Installing terraform...");
+    ui.set_is_installing(true);
+    assert!(ui.get_is_installing());
+    // Reset for remainder of tests
+    ui.set_all_deps_met(true);
+    ui.set_is_installing(false);
+
     // -- callback wiring (no panic) --
     ui.on_terraform_init(|| {});
     ui.on_terraform_apply(|| {});
@@ -174,6 +202,8 @@ fn ui_property_defaults() {
     ui.on_save_settings(|| {});
     ui.on_exec_claude(|_idx| {});
     ui.on_send_prompt(|_prompt| {});
+    ui.on_install_missing(|| {});
+    ui.on_continue_app(|| {});
 
     // -- callback invocation with counters --
     // Note: re-registering callbacks replaces the previous ones
@@ -306,4 +336,18 @@ fn ui_property_defaults() {
     ui.on_send_prompt(move |prompt| { *p.borrow_mut() = prompt.to_string(); });
     ui.invoke_send_prompt("hello claude".into());
     assert_eq!(*received_prompt.borrow(), "hello claude");
+
+    // install_missing
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_install_missing(move || { c.set(c.get() + 1); });
+    ui.invoke_install_missing();
+    assert_eq!(counter.get(), 1);
+
+    // continue_app
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_continue_app(move || { c.set(c.get() + 1); });
+    ui.invoke_continue_app();
+    assert_eq!(counter.get(), 1);
 }

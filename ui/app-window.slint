@@ -2,6 +2,7 @@ import { VerticalBox, HorizontalBox, Button, LineEdit, GroupBox, TabWidget, Scro
 import { ClusterPanel } from "components/cluster-panel.slint";
 import { ProjectsPanel, ProjectEntry } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
+import { SetupPanel } from "components/setup-panel.slint";
 
 export { ProjectEntry, PodEntry }
 
@@ -42,6 +43,19 @@ export component AppWindow inherits Window {
     in-out property <string> terraform-dir: "terraform";
     in-out property <string> helm-chart-dir: "helm/claude-code";
 
+    // Deps state
+    in property <bool> all-deps-met: true;
+    in property <bool> k3s-found: false;
+    in property <bool> terraform-found: false;
+    in property <bool> helm-found: false;
+    in property <bool> docker-found: false;
+    in property <string> k3s-version: "";
+    in property <string> terraform-version: "";
+    in property <string> helm-version: "";
+    in property <string> docker-version: "";
+    in property <string> install-log: "";
+    in property <bool> is-installing: false;
+
     // Cluster callbacks
     callback terraform-init();
     callback terraform-apply();
@@ -66,6 +80,10 @@ export component AppWindow inherits Window {
 
     // Settings callbacks
     callback save-settings();
+
+    // Deps callbacks
+    callback install-missing();
+    callback continue-app();
 
     VerticalBox {
         padding: 0px;
@@ -118,8 +136,26 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Tab content
-        TabWidget {
+        // Setup panel — shown when deps are missing
+        if !all-deps-met : SetupPanel {
+            vertical-stretch: 1;
+            k3s-found: root.k3s-found;
+            terraform-found: root.terraform-found;
+            helm-found: root.helm-found;
+            docker-found: root.docker-found;
+            k3s-version: root.k3s-version;
+            terraform-version: root.terraform-version;
+            helm-version: root.helm-version;
+            docker-version: root.docker-version;
+            install-log: root.install-log;
+            is-installing: root.is-installing;
+
+            install-missing => { root.install-missing(); }
+            continue-app => { root.continue-app(); }
+        }
+
+        // Tab content — shown when all deps are met
+        if all-deps-met : TabWidget {
             vertical-stretch: 1;
 
             Tab {
