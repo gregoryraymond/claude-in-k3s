@@ -97,7 +97,10 @@ impl DockerBuilder {
             .take()
             .ok_or_else(|| AppError::Docker("Failed to capture docker save stdout".into()))?;
 
-        // Convert tokio ChildStdout to std Stdio via the owned fd
+        // Convert tokio ChildStdout to std Stdio via the owned handle/fd
+        #[cfg(windows)]
+        let std_stdio: Stdio = save_stdout.into_owned_handle()?.into();
+        #[cfg(unix)]
         let std_stdio: Stdio = save_stdout.into_owned_fd()?.into();
 
         let output = Command::new("sudo")

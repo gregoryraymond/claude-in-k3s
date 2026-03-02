@@ -73,33 +73,48 @@ pub fn check_all(platform: &Platform) -> DepsStatus {
 }
 
 /// URL for downloading terraform binary
-pub fn terraform_download_url(arch: &str) -> String {
+pub fn terraform_download_url(arch: &str, platform: &Platform) -> String {
+    let os = match platform {
+        Platform::Windows => "windows",
+        Platform::MacOs => "darwin",
+        _ => "linux",
+    };
     let arch_suffix = match arch {
-        "aarch64" => "linux_arm64",
-        _ => "linux_amd64",
+        "aarch64" => "arm64",
+        _ => "amd64",
     };
     format!(
-        "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_{}.zip",
-        arch_suffix
+        "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_{}_{}.zip",
+        os, arch_suffix
     )
 }
 
 /// URL for downloading helm binary
-pub fn helm_download_url(arch: &str) -> String {
+pub fn helm_download_url(arch: &str, platform: &Platform) -> String {
+    let os = match platform {
+        Platform::Windows => "windows",
+        Platform::MacOs => "darwin",
+        _ => "linux",
+    };
     let arch_suffix = match arch {
-        "aarch64" => "linux-arm64",
-        _ => "linux-amd64",
+        "aarch64" => "arm64",
+        _ => "amd64",
+    };
+    let ext = match platform {
+        Platform::Windows => "zip",
+        _ => "tar.gz",
     };
     format!(
-        "https://get.helm.sh/helm-v3.16.4-{}.tar.gz",
-        arch_suffix
+        "https://get.helm.sh/helm-v3.16.4-{}-{}.{}",
+        os, arch_suffix, ext
     )
 }
 
 /// Install terraform by downloading the binary to ~/.local/bin/
 pub async fn install_terraform() -> Result<String, String> {
+    let platform = crate::platform::detect_platform();
     let arch = crate::platform::detect_arch();
-    let url = terraform_download_url(arch);
+    let url = terraform_download_url(arch, &platform);
     let install_dir = local_bin_dir()?;
     ensure_dir(&install_dir)?;
 
@@ -109,11 +124,12 @@ pub async fn install_terraform() -> Result<String, String> {
 
     let zip_path = tmp_dir.join("terraform.zip");
 
-    run_async(&format!("curl -fsSL -o {} {}", zip_path.display(), url)).await?;
-    run_async(&format!("unzip -o {} -d {}", zip_path.display(), tmp_dir.display())).await?;
+    run_async(&format!("curl -fsSL -o {} {}", shell_path(&zip_path), url)).await?;
+    run_async(&format!("unzip -o {} -d {}", shell_path(&zip_path), shell_path(&tmp_dir))).await?;
 
-    let src = tmp_dir.join("terraform");
-    let dst = install_dir.join("terraform");
+    let bin_name = crate::platform::terraform_binary(&platform);
+    let src = tmp_dir.join(bin_name);
+    let dst = install_dir.join(bin_name);
     std::fs::copy(&src, &dst).map_err(|e| format!("copy failed: {}", e))?;
 
     #[cfg(unix)]
@@ -129,8 +145,9 @@ pub async fn install_terraform() -> Result<String, String> {
 
 /// Install helm by downloading the binary to ~/.local/bin/
 pub async fn install_helm() -> Result<String, String> {
+    let platform = crate::platform::detect_platform();
     let arch = crate::platform::detect_arch();
-    let url = helm_download_url(arch);
+    let url = helm_download_url(arch, &platform);
     let install_dir = local_bin_dir()?;
     ensure_dir(&install_dir)?;
 
@@ -138,14 +155,30 @@ pub async fn install_helm() -> Result<String, String> {
     let _ = std::fs::remove_dir_all(&tmp_dir);
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("mkdir failed: {}", e))?;
 
-    let tar_path = tmp_dir.join("helm.tar.gz");
+    let is_windows = matches!(platform, Platform::Windows);
+    let archive_name = if is_windows { "helm.zip" } else { "helm.tar.gz" };
+    let archive_path = tmp_dir.join(archive_name);
 
-    run_async(&format!("curl -fsSL -o {} {}", tar_path.display(), url)).await?;
-    run_async(&format!("tar xzf {} -C {}", tar_path.display(), tmp_dir.display())).await?;
+    run_async(&format!("curl -fsSL -o {} {}", shell_path(&archive_path), url)).await?;
 
-    let arch_dir = if arch == "aarch64" { "linux-arm64" } else { "linux-amd64" };
-    let src = tmp_dir.join(arch_dir).join("helm");
-    let dst = install_dir.join("helm");
+    if is_windows {
+        run_async(&format!("unzip -o {} -d {}", shell_path(&archive_path), shell_path(&tmp_dir))).await?;
+    } else {
+        run_async(&format!("tar xzf {} -C {}", shell_path(&archive_path), shell_path(&tmp_dir))).await?;
+    }
+
+    let (os_name, arch_name) = match (&platform, arch) {
+        (Platform::Windows, "aarch64") => ("windows", "arm64"),
+        (Platform::Windows, _) => ("windows", "amd64"),
+        (Platform::MacOs, "aarch64") => ("darwin", "arm64"),
+        (Platform::MacOs, _) => ("darwin", "amd64"),
+        (_, "aarch64") => ("linux", "arm64"),
+        _ => ("linux", "amd64"),
+    };
+    let arch_dir = format!("{}-{}", os_name, arch_name);
+    let bin_name = crate::platform::helm_binary(&platform);
+    let src = tmp_dir.join(&arch_dir).join(bin_name);
+    let dst = install_dir.join(bin_name);
     std::fs::copy(&src, &dst).map_err(|e| format!("copy failed: {}", e))?;
 
     #[cfg(unix)]
@@ -161,12 +194,28 @@ pub async fn install_helm() -> Result<String, String> {
 
 /// Install k3s using the official install script (requires sudo)
 pub async fn install_k3s() -> Result<String, String> {
-    run_async("curl -sfL https://get.k3s.io | sudo sh -").await
+    let platform = crate::platform::detect_platform();
+    match platform {
+        Platform::Windows => Err(
+            "k3s cannot be installed directly on Windows. \
+             Please use WSL2 or a Linux VM."
+                .to_string(),
+        ),
+        _ => run_async("curl -sfL https://get.k3s.io | sudo sh -").await,
+    }
 }
 
 /// Install docker using the official install script (requires sudo)
 pub async fn install_docker() -> Result<String, String> {
-    run_async("curl -fsSL https://get.docker.com | sudo sh").await
+    let platform = crate::platform::detect_platform();
+    match platform {
+        Platform::Windows => Err(
+            "Please install Docker Desktop from \
+             https://www.docker.com/products/docker-desktop/"
+                .to_string(),
+        ),
+        _ => run_async("curl -fsSL https://get.docker.com | sudo sh").await,
+    }
 }
 
 fn local_bin_dir() -> Result<std::path::PathBuf, String> {
@@ -176,6 +225,13 @@ fn local_bin_dir() -> Result<std::path::PathBuf, String> {
 
 fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("Failed to create {}: {}", path.display(), e))
+}
+
+/// Convert a path to a shell-safe string with forward slashes.
+/// On Windows/MINGW, backslash paths break shell commands (backslashes are
+/// interpreted as escapes, and colons as remote-host prefixes by tar).
+fn shell_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 async fn run_async(cmd: &str) -> Result<String, String> {
@@ -253,30 +309,56 @@ mod tests {
     }
 
     #[test]
-    fn terraform_download_url_x86_64() {
-        let url = terraform_download_url("x86_64");
+    fn terraform_download_url_linux_x86_64() {
+        let url = terraform_download_url("x86_64", &Platform::Linux);
         assert!(url.contains("terraform"));
         assert!(url.contains("linux_amd64"));
     }
 
     #[test]
-    fn terraform_download_url_aarch64() {
-        let url = terraform_download_url("aarch64");
+    fn terraform_download_url_linux_aarch64() {
+        let url = terraform_download_url("aarch64", &Platform::Linux);
         assert!(url.contains("terraform"));
         assert!(url.contains("linux_arm64"));
     }
 
     #[test]
-    fn helm_download_url_x86_64() {
-        let url = helm_download_url("x86_64");
-        assert!(url.contains("helm"));
-        assert!(url.contains("linux-amd64"));
+    fn terraform_download_url_windows() {
+        let url = terraform_download_url("x86_64", &Platform::Windows);
+        assert!(url.contains("windows_amd64"));
     }
 
     #[test]
-    fn helm_download_url_aarch64() {
-        let url = helm_download_url("aarch64");
+    fn helm_download_url_linux_x86_64() {
+        let url = helm_download_url("x86_64", &Platform::Linux);
+        assert!(url.contains("helm"));
+        assert!(url.contains("linux-amd64"));
+        assert!(url.ends_with(".tar.gz"));
+    }
+
+    #[test]
+    fn helm_download_url_linux_aarch64() {
+        let url = helm_download_url("aarch64", &Platform::Linux);
         assert!(url.contains("helm"));
         assert!(url.contains("linux-arm64"));
+    }
+
+    #[test]
+    fn helm_download_url_windows() {
+        let url = helm_download_url("x86_64", &Platform::Windows);
+        assert!(url.contains("windows-amd64"));
+        assert!(url.ends_with(".zip"));
+    }
+
+    #[test]
+    fn shell_path_converts_backslashes() {
+        let path = std::path::PathBuf::from("C:\\Users\\Greg\\file.zip");
+        assert_eq!(shell_path(&path), "C:/Users/Greg/file.zip");
+    }
+
+    #[test]
+    fn shell_path_preserves_forward_slashes() {
+        let path = std::path::PathBuf::from("/tmp/file.zip");
+        assert_eq!(shell_path(&path), "/tmp/file.zip");
     }
 }
