@@ -39,6 +39,13 @@ fn main() -> anyhow::Result<()> {
             ui.set_api_key(key.into());
         }
         ui.set_tf_initialized(s.terraform_runner().is_initialized());
+        ui.set_claude_mode(s.config.claude_mode.clone().into());
+        ui.set_git_user_name(s.config.git_user_name.clone().into());
+        ui.set_git_user_email(s.config.git_user_email.clone().into());
+        ui.set_cpu_limit(s.config.cpu_limit.clone().into());
+        ui.set_memory_limit(s.config.memory_limit.clone().into());
+        ui.set_terraform_dir(s.config.terraform_dir.clone().into());
+        ui.set_helm_chart_dir(s.config.helm_chart_dir.clone().into());
     }
 
     // --- Terraform callbacks ---
@@ -575,6 +582,13 @@ fn main() -> anyhow::Result<()> {
                 let mut s = state.lock().unwrap();
                 let key = ui.get_api_key().to_string();
                 s.config.api_key = if key.is_empty() { None } else { Some(key) };
+                s.config.claude_mode = ui.get_claude_mode().to_string();
+                s.config.git_user_name = ui.get_git_user_name().to_string();
+                s.config.git_user_email = ui.get_git_user_email().to_string();
+                s.config.cpu_limit = ui.get_cpu_limit().to_string();
+                s.config.memory_limit = ui.get_memory_limit().to_string();
+                s.config.terraform_dir = ui.get_terraform_dir().to_string();
+                s.config.helm_chart_dir = ui.get_helm_chart_dir().to_string();
                 match s.config.save() {
                     Ok(_) => s.append_log("Settings saved."),
                     Err(e) => s.append_log(&format!("Failed to save settings: {}", e)),

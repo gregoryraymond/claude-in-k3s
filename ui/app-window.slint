@@ -1,4 +1,4 @@
-import { VerticalBox, HorizontalBox, Button, LineEdit, GroupBox, TabWidget } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, Button, LineEdit, GroupBox, TabWidget, ScrollView, ComboBox } from "std-widgets.slint";
 import { ClusterPanel } from "components/cluster-panel.slint";
 import { ProjectsPanel, ProjectEntry } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
@@ -28,6 +28,15 @@ export component AppWindow inherits Window {
     // Settings state
     in-out property <string> api-key: "";
     in property <string> platform-name: "Linux";
+
+    // Extended settings state
+    in-out property <string> claude-mode: "daemon";
+    in-out property <string> git-user-name: "Claude Code Bot";
+    in-out property <string> git-user-email: "claude-bot@localhost";
+    in-out property <string> cpu-limit: "2";
+    in-out property <string> memory-limit: "4Gi";
+    in-out property <string> terraform-dir: "terraform";
+    in-out property <string> helm-chart-dir: "helm/claude-code";
 
     // Cluster callbacks
     callback terraform-init();
@@ -157,46 +166,127 @@ export component AppWindow inherits Window {
             Tab {
                 title: "Settings";
 
-                VerticalBox {
-                    padding: 16px;
-                    spacing: 12px;
+                ScrollView {
+                    VerticalBox {
+                        padding: 16px;
+                        spacing: 12px;
 
-                    Text {
-                        text: "Settings";
-                        font-size: 20px;
-                        font-weight: 700;
-                    }
-
-                    GroupBox {
-                        title: "Anthropic API Key";
-
-                        LineEdit {
-                            text <=> root.api-key;
-                            placeholder-text: "sk-ant-...";
-                            input-type: password;
+                        Text {
+                            text: "Settings";
+                            font-size: 20px;
+                            font-weight: 700;
                         }
-                    }
 
-                    GroupBox {
-                        title: "Platform Info";
+                        GroupBox {
+                            title: "Anthropic API Key";
 
-                        VerticalBox {
-                            spacing: 4px;
-
-                            Text {
-                                text: "Detected platform: " + root.platform-name;
-                                font-size: 13px;
+                            LineEdit {
+                                text <=> root.api-key;
+                                placeholder-text: "sk-ant-...";
+                                input-type: password;
                             }
                         }
-                    }
 
-                    Button {
-                        text: "Save Settings";
-                        clicked => { root.save-settings(); }
-                    }
+                        GroupBox {
+                            title: "Claude Mode";
 
-                    // Spacer
-                    Rectangle { vertical-stretch: 1; }
+                            HorizontalBox {
+                                spacing: 8px;
+
+                                Text {
+                                    text: "Mode:";
+                                    vertical-alignment: center;
+                                    font-size: 13px;
+                                }
+
+                                ComboBox {
+                                    model: ["daemon", "headless"];
+                                    current-value <=> root.claude-mode;
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Git Configuration";
+
+                            VerticalBox {
+                                spacing: 8px;
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "User Name:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.git-user-name; placeholder-text: "Claude Code Bot"; }
+                                }
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "Email:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.git-user-email; placeholder-text: "claude-bot@localhost"; }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Resource Limits";
+
+                            VerticalBox {
+                                spacing: 8px;
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "CPU Limit:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.cpu-limit; placeholder-text: "2"; }
+                                }
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "Memory:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.memory-limit; placeholder-text: "4Gi"; }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Directories";
+
+                            VerticalBox {
+                                spacing: 8px;
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "Terraform:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.terraform-dir; placeholder-text: "terraform"; }
+                                }
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Text { text: "Helm Chart:"; width: 100px; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.helm-chart-dir; placeholder-text: "helm/claude-code"; }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Platform Info";
+
+                            VerticalBox {
+                                spacing: 4px;
+
+                                Text {
+                                    text: "Detected platform: " + root.platform-name;
+                                    font-size: 13px;
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "Save Settings";
+                            clicked => { root.save-settings(); }
+                        }
+
+                        // Spacer
+                        Rectangle { vertical-stretch: 1; }
+                    }
                 }
             }
         }

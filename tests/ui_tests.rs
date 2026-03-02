@@ -22,6 +22,15 @@ fn ui_property_defaults() {
     assert_eq!(ui.get_api_key(), "");
     assert_eq!(ui.get_platform_name(), "Linux");
 
+    // Check defaults for new settings properties
+    assert_eq!(ui.get_claude_mode(), "daemon");
+    assert_eq!(ui.get_git_user_name(), "Claude Code Bot");
+    assert_eq!(ui.get_git_user_email(), "claude-bot@localhost");
+    assert_eq!(ui.get_cpu_limit(), "2");
+    assert_eq!(ui.get_memory_limit(), "4Gi");
+    assert_eq!(ui.get_terraform_dir(), "terraform");
+    assert_eq!(ui.get_helm_chart_dir(), "helm/claude-code");
+
     // -- set/get cluster status --
     ui.set_cluster_status("Healthy".into());
     assert_eq!(ui.get_cluster_status(), "Healthy");
@@ -55,6 +64,22 @@ fn ui_property_defaults() {
     // -- set/get cluster_log --
     ui.set_cluster_log("Running terraform init...\nDone.".into());
     assert_eq!(ui.get_cluster_log(), "Running terraform init...\nDone.");
+
+    // Set/get new settings properties
+    ui.set_claude_mode("headless".into());
+    assert_eq!(ui.get_claude_mode(), "headless");
+    ui.set_git_user_name("Test Bot".into());
+    assert_eq!(ui.get_git_user_name(), "Test Bot");
+    ui.set_git_user_email("test@example.com".into());
+    assert_eq!(ui.get_git_user_email(), "test@example.com");
+    ui.set_cpu_limit("4".into());
+    assert_eq!(ui.get_cpu_limit(), "4");
+    ui.set_memory_limit("8Gi".into());
+    assert_eq!(ui.get_memory_limit(), "8Gi");
+    ui.set_terraform_dir("custom-tf".into());
+    assert_eq!(ui.get_terraform_dir(), "custom-tf");
+    ui.set_helm_chart_dir("custom-helm".into());
+    assert_eq!(ui.get_helm_chart_dir(), "custom-helm");
 
     // -- projects model empty by default --
     // (reset to check model defaults on a fresh window isn't possible,
