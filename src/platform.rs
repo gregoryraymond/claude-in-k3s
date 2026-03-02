@@ -71,6 +71,17 @@ pub fn platform_display_name(platform: &Platform) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
+pub fn detect_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64" // fallback
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +163,15 @@ mod tests {
     fn kubeconfig_path_ends_with_kube_config() {
         let path = kubeconfig_default_path();
         assert!(path.ends_with(".kube/config"));
+    }
+
+    #[test]
+    fn detect_arch_returns_known_value() {
+        let arch = detect_arch();
+        assert!(
+            arch == "x86_64" || arch == "aarch64" || arch == "arm64",
+            "unexpected arch: {}",
+            arch
+        );
     }
 }
