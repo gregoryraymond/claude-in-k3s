@@ -1,6 +1,5 @@
 mod app;
 mod config;
-#[allow(dead_code)]
 mod deps;
 mod docker;
 mod error;
@@ -48,6 +47,30 @@ fn main() -> anyhow::Result<()> {
         ui.set_memory_limit(s.config.memory_limit.clone().into());
         ui.set_terraform_dir(s.config.terraform_dir.clone().into());
         ui.set_helm_chart_dir(s.config.helm_chart_dir.clone().into());
+    }
+
+    // Set deps state
+    {
+        let s = state.lock().unwrap();
+        let deps = &s.deps_status;
+        ui.set_all_deps_met(deps.all_met());
+
+        if let deps::ToolStatus::Found { ref version } = deps.k3s {
+            ui.set_k3s_found(true);
+            ui.set_k3s_version(version.clone().into());
+        }
+        if let deps::ToolStatus::Found { ref version } = deps.terraform {
+            ui.set_terraform_found(true);
+            ui.set_terraform_version(version.clone().into());
+        }
+        if let deps::ToolStatus::Found { ref version } = deps.helm {
+            ui.set_helm_found(true);
+            ui.set_helm_version(version.clone().into());
+        }
+        if let deps::ToolStatus::Found { ref version } = deps.docker {
+            ui.set_docker_found(true);
+            ui.set_docker_version(version.clone().into());
+        }
     }
 
     // --- Terraform callbacks ---
@@ -677,6 +700,134 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
+    // --- Install missing deps ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_install_missing(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            if let Some(u) = ui.upgrade() {
+                u.set_is_installing(true);
+                u.set_install_log("Starting installation of missing dependencies...\n".into());
+            }
+
+            rt_handle.spawn(async move {
+                let deps = {
+                    let s = state.lock().unwrap();
+                    s.deps_status.clone()
+                };
+
+                let mut log = String::from("Starting installation of missing dependencies...\n");
+
+                if !deps.terraform.is_found() {
+                    log.push_str("\n--- Installing Terraform ---\n");
+                    update_install_log(&ui, &log);
+                    match deps::install_terraform().await {
+                        Ok(msg) => log.push_str(&format!("OK: {}\n", msg)),
+                        Err(e) => log.push_str(&format!("FAILED: {}\n", e)),
+                    }
+                    update_install_log(&ui, &log);
+                }
+
+                if !deps.helm.is_found() {
+                    log.push_str("\n--- Installing Helm ---\n");
+                    update_install_log(&ui, &log);
+                    match deps::install_helm().await {
+                        Ok(msg) => log.push_str(&format!("OK: {}\n", msg)),
+                        Err(e) => log.push_str(&format!("FAILED: {}\n", e)),
+                    }
+                    update_install_log(&ui, &log);
+                }
+
+                if !deps.k3s.is_found() {
+                    log.push_str("\n--- Installing k3s ---\n");
+                    log.push_str("(This requires sudo)\n");
+                    update_install_log(&ui, &log);
+                    match deps::install_k3s().await {
+                        Ok(msg) => log.push_str(&format!("OK: {}\n", msg)),
+                        Err(e) => log.push_str(&format!("FAILED: {}\n", e)),
+                    }
+                    update_install_log(&ui, &log);
+                }
+
+                if !deps.docker.is_found() {
+                    log.push_str("\n--- Installing Docker ---\n");
+                    log.push_str("(This requires sudo)\n");
+                    update_install_log(&ui, &log);
+                    match deps::install_docker().await {
+                        Ok(msg) => log.push_str(&format!("OK: {}\n", msg)),
+                        Err(e) => log.push_str(&format!("FAILED: {}\n", e)),
+                    }
+                    update_install_log(&ui, &log);
+                }
+
+                // Re-check all deps
+                log.push_str("\n--- Re-checking dependencies ---\n");
+                update_install_log(&ui, &log);
+                let platform = {
+                    let s = state.lock().unwrap();
+                    s.platform.clone()
+                };
+                let new_status = deps::check_all(&platform);
+                let all_met = new_status.all_met();
+
+                {
+                    let mut s = state.lock().unwrap();
+                    s.deps_status = new_status.clone();
+                }
+
+                if all_met {
+                    log.push_str("All dependencies satisfied!\n");
+                } else {
+                    log.push_str("Some dependencies are still missing. Check the log above.\n");
+                }
+
+                let final_log = log;
+                let new_status_clone = new_status;
+                slint::invoke_from_event_loop(move || {
+                    if let Some(u) = ui.upgrade() {
+                        u.set_install_log(final_log.into());
+                        u.set_is_installing(false);
+                        u.set_all_deps_met(all_met);
+
+                        if let deps::ToolStatus::Found { ref version } = new_status_clone.k3s {
+                            u.set_k3s_found(true);
+                            u.set_k3s_version(version.clone().into());
+                        }
+                        if let deps::ToolStatus::Found { ref version } = new_status_clone.terraform {
+                            u.set_terraform_found(true);
+                            u.set_terraform_version(version.clone().into());
+                        }
+                        if let deps::ToolStatus::Found { ref version } = new_status_clone.helm {
+                            u.set_helm_found(true);
+                            u.set_helm_version(version.clone().into());
+                        }
+                        if let deps::ToolStatus::Found { ref version } = new_status_clone.docker {
+                            u.set_docker_found(true);
+                            u.set_docker_version(version.clone().into());
+                        }
+                    }
+                })
+                .ok();
+            });
+        });
+    }
+
+    // --- Continue from setup ---
+    {
+        let ui_handle = ui.as_weak();
+
+        ui.on_continue_app(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_all_deps_met(true);
+            }
+        });
+    }
+
     // --- Periodic pod health check ---
     {
         let ui_handle = ui.as_weak();
@@ -810,6 +961,17 @@ fn format_cmd_result(cmd: &str, r: &error::CmdResult) -> String {
         out.push_str(&format!("\nSTDERR: {}", r.stderr.trim()));
     }
     out
+}
+
+fn update_install_log(ui: &slint::Weak<AppWindow>, log: &str) {
+    let log = log.to_string();
+    let ui = ui.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(u) = ui.upgrade() {
+            u.set_install_log(log.into());
+        }
+    })
+    .ok();
 }
 
 #[cfg(test)]

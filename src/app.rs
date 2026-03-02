@@ -17,7 +17,6 @@ pub struct AppState {
     pub pods: Vec<PodStatus>,
     pub cluster_healthy: bool,
     pub tf_initialized: bool,
-    #[allow(dead_code)] // used by upcoming SetupPanel UI wiring
     pub deps_status: DepsStatus,
     pub log_buffer: String,
     project_root: PathBuf,
