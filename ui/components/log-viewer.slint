@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { ScrollView } from "std-widgets.slint";
+import { TextEdit } from "std-widgets.slint";
 
 export component LogViewer inherits Rectangle {
     in property <string> text: "";
@@ -10,16 +10,12 @@ export component LogViewer inherits Rectangle {
     border-color: Theme.border;
     min-height: 150px;
 
-    ScrollView {
-        VerticalLayout {
-            padding: 12px;
-
-            Text {
-                text: root.text;
-                font-size: 12px;
-                color: Theme.log-text;
-                wrap: word-wrap;
-            }
+    VerticalLayout {
+        TextEdit {
+            text: root.text;
+            font-size: 12px;
+            read-only: true;
+            wrap: word-wrap;
         }
     }
 }

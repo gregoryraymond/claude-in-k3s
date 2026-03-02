@@ -5,7 +5,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub projects_dir: Option<String>,
-    pub api_key: Option<String>,
     pub terraform_dir: String,
     pub helm_chart_dir: String,
     pub claude_mode: String,
@@ -19,7 +18,6 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             projects_dir: None,
-            api_key: None,
             terraform_dir: "terraform".into(),
             helm_chart_dir: "helm/claude-code".into(),
             claude_mode: "daemon".into(),
@@ -93,7 +91,6 @@ mod tests {
     fn default_config_values() {
         let cfg = AppConfig::default();
         assert!(cfg.projects_dir.is_none());
-        assert!(cfg.api_key.is_none());
         assert_eq!(cfg.terraform_dir, "terraform");
         assert_eq!(cfg.helm_chart_dir, "helm/claude-code");
         assert_eq!(cfg.claude_mode, "daemon");
@@ -115,7 +112,6 @@ mod tests {
     fn serialize_deserialize_roundtrip() {
         let cfg = AppConfig {
             projects_dir: Some("/tmp/projects".into()),
-            api_key: Some("sk-test-key".into()),
             terraform_dir: "my-tf".into(),
             helm_chart_dir: "charts/claude".into(),
             claude_mode: "interactive".into(),
@@ -129,7 +125,6 @@ mod tests {
         let loaded: AppConfig = toml::from_str(&toml_str).expect("deserialize");
 
         assert_eq!(loaded.projects_dir.as_deref(), Some("/tmp/projects"));
-        assert_eq!(loaded.api_key.as_deref(), Some("sk-test-key"));
         assert_eq!(loaded.terraform_dir, "my-tf");
         assert_eq!(loaded.helm_chart_dir, "charts/claude");
         assert_eq!(loaded.claude_mode, "interactive");
@@ -143,14 +138,12 @@ mod tests {
     fn serialize_with_none_fields() {
         let cfg = AppConfig {
             projects_dir: None,
-            api_key: None,
             ..AppConfig::default()
         };
 
         let toml_str = toml::to_string_pretty(&cfg).expect("serialize");
         // None fields should not appear in the serialized output.
         assert!(!toml_str.contains("projects_dir"));
-        assert!(!toml_str.contains("api_key"));
         // Required fields must still be present.
         assert!(toml_str.contains("terraform_dir"));
     }
@@ -170,7 +163,6 @@ mod tests {
 
         let cfg: AppConfig = toml::from_str(toml_str).expect("deserialize");
         assert!(cfg.projects_dir.is_none());
-        assert!(cfg.api_key.is_none());
     }
 
     #[test]
@@ -180,7 +172,6 @@ mod tests {
 
         let cfg = AppConfig {
             projects_dir: Some("/home/user/projects".into()),
-            api_key: Some("sk-roundtrip".into()),
             terraform_dir: "custom-tf".into(),
             helm_chart_dir: "custom-helm".into(),
             claude_mode: "batch".into(),
@@ -194,7 +185,6 @@ mod tests {
         let loaded = AppConfig::load_from(&path).expect("load");
 
         assert_eq!(loaded.projects_dir.as_deref(), Some("/home/user/projects"));
-        assert_eq!(loaded.api_key.as_deref(), Some("sk-roundtrip"));
         assert_eq!(loaded.terraform_dir, "custom-tf");
         assert_eq!(loaded.helm_chart_dir, "custom-helm");
         assert_eq!(loaded.claude_mode, "batch");
@@ -214,7 +204,6 @@ mod tests {
         // Should be identical to Default.
         let def = AppConfig::default();
         assert_eq!(cfg.projects_dir, def.projects_dir);
-        assert_eq!(cfg.api_key, def.api_key);
         assert_eq!(cfg.terraform_dir, def.terraform_dir);
         assert_eq!(cfg.helm_chart_dir, def.helm_chart_dir);
         assert_eq!(cfg.claude_mode, def.claude_mode);

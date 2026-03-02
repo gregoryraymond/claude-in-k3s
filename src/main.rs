@@ -11,7 +11,10 @@ mod terraform;
 
 use app::AppState;
 use projects::BaseImage;
+use slint::Model;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use kubectl::PodStatus;
 
 slint::include_modules!();
 
@@ -35,9 +38,6 @@ fn main() -> anyhow::Result<()> {
         ui.set_platform_name(platform::platform_display_name(&s.platform).into());
         if let Some(ref dir) = s.config.projects_dir {
             ui.set_projects_dir(dir.into());
-        }
-        if let Some(ref key) = s.config.api_key {
-            ui.set_api_key(key.into());
         }
         ui.set_tf_initialized(s.terraform_runner().is_initialized());
         ui.set_claude_mode(s.config.claude_mode.clone().into());
@@ -72,6 +72,10 @@ fn main() -> anyhow::Result<()> {
             ui.set_docker_found(true);
             ui.set_docker_version(version.clone().into());
         }
+        if let deps::ToolStatus::Found { ref version } = deps.claude {
+            ui.set_claude_found(true);
+            ui.set_claude_version(version.clone().into());
+        }
     }
 
     // --- Terraform callbacks ---
@@ -81,68 +85,81 @@ fn main() -> anyhow::Result<()> {
         let state = state.clone();
         let rt_handle = rt.handle().clone();
 
-        ui.on_terraform_init(move || {
+        ui.on_cluster_deploy(move || {
             let ui = ui_handle.clone();
             let state = state.clone();
             set_busy(&ui, true);
-            append_log(&state, "Running terraform init...");
+            append_log(&state, "Deploying cluster...");
             sync_log(&ui, &state);
 
             rt_handle.spawn(async move {
+                // Step 1: terraform init
                 let runner = {
                     let s = state.lock().unwrap();
                     s.terraform_runner()
                 };
-                let result = runner.init().await;
+                let init_result = runner.init().await;
 
-                slint::invoke_from_event_loop(move || {
-                    match result {
-                        Ok(r) => {
-                            append_log(&state, &format_cmd_result("terraform init", &r));
-                            if r.success {
-                                state.lock().unwrap().tf_initialized = true;
-                                if let Some(ui) = ui.upgrade() {
-                                    ui.set_tf_initialized(true);
-                                }
-                            }
-                        }
-                        Err(e) => append_log(&state, &format!("Error: {}", e)),
+                let init_ok = match &init_result {
+                    Ok(r) => {
+                        let msg = format_cmd_result("terraform init", r);
+                        let state2 = state.clone();
+                        let ui2 = ui.clone();
+                        slint::invoke_from_event_loop(move || {
+                            append_log(&state2, &msg);
+                            sync_log(&ui2, &state2);
+                        })
+                        .ok();
+                        r.success
                     }
-                    set_busy(&ui, false);
-                    sync_log(&ui, &state);
-                })
-                .ok();
-            });
-        });
-    }
-
-    {
-        let ui_handle = ui.as_weak();
-        let state = state.clone();
-        let rt_handle = rt.handle().clone();
-
-        ui.on_terraform_apply(move || {
-            let ui = ui_handle.clone();
-            let state = state.clone();
-            set_busy(&ui, true);
-            append_log(&state, "Running terraform apply...");
-            sync_log(&ui, &state);
-
-            rt_handle.spawn(async move {
-                let runner = {
-                    let s = state.lock().unwrap();
-                    s.terraform_runner()
+                    Err(e) => {
+                        let msg = format!("Error: {}", e);
+                        let state2 = state.clone();
+                        let ui2 = ui.clone();
+                        slint::invoke_from_event_loop(move || {
+                            append_log(&state2, &msg);
+                            sync_log(&ui2, &state2);
+                        })
+                        .ok();
+                        false
+                    }
                 };
-                let result = runner.apply().await;
+
+                if !init_ok {
+                    let ui2 = ui.clone();
+                    slint::invoke_from_event_loop(move || {
+                        set_busy(&ui2, false);
+                    })
+                    .ok();
+                    return;
+                }
+
+                // Mark tf_initialized after successful init
+                {
+                    let state2 = state.clone();
+                    let ui2 = ui.clone();
+                    slint::invoke_from_event_loop(move || {
+                        state2.lock().unwrap().tf_initialized = true;
+                        if let Some(ui) = ui2.upgrade() {
+                            ui.set_tf_initialized(true);
+                        }
+                    })
+                    .ok();
+                }
+
+                // Step 2: terraform apply
+                let apply_result = runner.apply().await;
 
                 slint::invoke_from_event_loop(move || {
-                    match result {
+                    match apply_result {
                         Ok(r) => {
                             append_log(&state, &format_cmd_result("terraform apply", &r));
                             if r.success {
                                 state.lock().unwrap().cluster_healthy = true;
                                 if let Some(ui) = ui.upgrade() {
                                     ui.set_cluster_status("Healthy".into());
+                                    ui.set_tf_initialized(true);
+                                    ui.set_active_page(1); // Navigate to Projects
                                 }
                             }
                         }
@@ -246,6 +263,7 @@ fn main() -> anyhow::Result<()> {
                 {
                     let mut s = state.lock().unwrap();
                     s.config.projects_dir = Some(path_str.clone());
+                    let _ = s.config.save();
                     let _ = s.scan_projects();
                 }
 
@@ -273,25 +291,61 @@ fn main() -> anyhow::Result<()> {
 
     // --- Project toggled ---
     {
+        let ui_handle = ui.as_weak();
         let state = state.clone();
 
         ui.on_project_toggled(move |idx, checked| {
-            let mut s = state.lock().unwrap();
-            if let Some(p) = s.projects.get_mut(idx as usize) {
-                p.selected = checked;
+            {
+                let mut s = state.lock().unwrap();
+                if let Some(p) = s.projects.get_mut(idx as usize) {
+                    p.selected = checked;
+                }
             }
+            sync_projects(&ui_handle, &state);
         });
     }
 
     // --- Project image changed ---
     {
+        let ui_handle = ui.as_weak();
         let state = state.clone();
 
         ui.on_project_image_changed(move |idx, img_idx| {
-            let mut s = state.lock().unwrap();
-            if let Some(p) = s.projects.get_mut(idx as usize) {
-                p.base_image = BaseImage::from_index(img_idx);
+            {
+                let mut s = state.lock().unwrap();
+                if let Some(p) = s.projects.get_mut(idx as usize) {
+                    p.base_image = BaseImage::from_index(img_idx);
+                }
             }
+            sync_projects(&ui_handle, &state);
+        });
+    }
+
+    // --- Toggle select all ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+
+        ui.on_toggle_select_all(move || {
+            {
+                let mut s = state.lock().unwrap();
+                let all_selected = s.projects.iter().all(|p| p.selected);
+                let new_val = !all_selected;
+                for p in &mut s.projects {
+                    p.selected = new_val;
+                }
+            }
+            sync_projects(&ui_handle, &state);
+        });
+    }
+
+    // --- Cancel launch ---
+    {
+        let state = state.clone();
+
+        ui.on_cancel_launch(move || {
+            let s = state.lock().unwrap();
+            s.cancel_flag.store(true, Ordering::Relaxed);
         });
     }
 
@@ -304,99 +358,148 @@ fn main() -> anyhow::Result<()> {
         ui.on_launch_selected(move || {
             let ui = ui_handle.clone();
             let state = state.clone();
-            set_busy(&ui, true);
-            append_log(&state, "Building images and deploying selected projects...");
-            sync_log(&ui, &state);
 
-            let (api_key, selected_projects, docker_builder, helm_runner) = {
+            let (selected_projects, docker_builder, helm_runner, cancel_flag) = {
                 let s = state.lock().unwrap();
-                let api_key = s.config.api_key.clone().unwrap_or_default();
+                s.cancel_flag.store(false, Ordering::Relaxed);
                 let projects = s.selected_projects().into_iter().cloned().collect::<Vec<_>>();
-                (api_key, projects, s.docker_builder(), s.helm_runner())
+                (projects, s.docker_builder(), s.helm_runner(), s.cancel_flag.clone())
             };
 
+            if selected_projects.is_empty() {
+                append_log(&state, "No projects selected.");
+                sync_log(&ui, &state);
+                return;
+            }
+
+            set_busy(&ui, true);
+
+            // Build launch tabs model: tab 0 = Summary, then one per project
+            let mut tabs: Vec<LaunchTab> = Vec::new();
+            tabs.push(LaunchTab {
+                name: "Summary".into(),
+                status: "Building".into(),
+                log_text: "Starting build...\n".into(),
+            });
+            for p in &selected_projects {
+                tabs.push(LaunchTab {
+                    name: p.name.clone().into(),
+                    status: "Pending".into(),
+                    log_text: Default::default(),
+                });
+            }
+
+            if let Some(u) = ui.upgrade() {
+                let model = std::rc::Rc::new(slint::VecModel::from(tabs));
+                u.set_launch_tabs(model.into());
+                u.set_active_launch_tab(0);
+            }
+
             rt_handle.spawn(async move {
-                // Build and import Docker images for each selected project
                 let mut project_tuples = Vec::new();
-                let mut build_failed = false;
+                let mut any_failed = false;
 
-                for project in &selected_projects {
-                    let tag = docker::image_tag_for_project(project);
+                for (i, project) in selected_projects.iter().enumerate() {
+                    let tab_idx = (i + 1) as i32; // +1 because tab 0 is Summary
 
-                    slint::invoke_from_event_loop({
-                        let state = state.clone();
-                        let ui = ui.clone();
-                        let name = project.name.clone();
-                        move || {
-                            append_log(&state, &format!("Building image for '{}'...", name));
-                            sync_log(&ui, &state);
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        // Mark remaining as Cancelled
+                        for j in i..selected_projects.len() {
+                            update_tab_status(&ui, (j + 1) as i32, "Cancelled");
                         }
-                    }).ok();
+                        append_to_tab(&ui, 0, "Cancelled by user.");
+                        break;
+                    }
 
-                    match docker_builder.build_and_import(project).await {
+                    update_tab_status(&ui, tab_idx, "Building");
+                    append_to_tab(&ui, 0, &format!("Building '{}'...", project.name));
+
+                    let ui_for_line = ui.clone();
+                    let on_line = move |line: &str| {
+                        append_to_tab(&ui_for_line, tab_idx, line);
+                    };
+
+                    match docker_builder.build_and_import_streaming(project, &cancel_flag, &on_line).await {
                         Ok(r) if r.success => {
+                            let tag = docker::image_tag_for_project(project);
                             project_tuples.push((
                                 project.name.clone(),
                                 project.path.to_string_lossy().to_string(),
                                 tag,
                             ));
+                            update_tab_status(&ui, tab_idx, "Done");
+                            append_to_tab(&ui, 0, &format!("'{}' built successfully.", project.name));
                         }
                         Ok(r) => {
-                            let msg = format!("Image build failed for '{}': {}", project.name, r.stderr);
-                            slint::invoke_from_event_loop({
-                                let state = state.clone();
-                                let ui = ui.clone();
-                                move || {
-                                    append_log(&state, &msg);
-                                    sync_log(&ui, &state);
-                                }
-                            }).ok();
-                            build_failed = true;
-                            break;
+                            let status = if r.stderr.contains("Cancel") { "Cancelled" } else { "Failed" };
+                            update_tab_status(&ui, tab_idx, status);
+                            append_to_tab(&ui, 0, &format!("'{}' failed: {}", project.name, r.stderr.trim()));
+                            if status == "Failed" {
+                                any_failed = true;
+                            }
                         }
                         Err(e) => {
-                            let msg = format!("Image build error for '{}': {}", project.name, e);
-                            slint::invoke_from_event_loop({
-                                let state = state.clone();
-                                let ui = ui.clone();
-                                move || {
-                                    append_log(&state, &msg);
-                                    sync_log(&ui, &state);
-                                }
-                            }).ok();
-                            build_failed = true;
-                            break;
+                            update_tab_status(&ui, tab_idx, "Failed");
+                            append_to_tab(&ui, 0, &format!("'{}' error: {}", project.name, e));
+                            any_failed = true;
                         }
                     }
                 }
 
-                if build_failed || project_tuples.is_empty() {
-                    slint::invoke_from_event_loop(move || {
-                        if !build_failed {
-                            append_log(&state, "No projects to deploy.");
-                        }
-                        set_busy(&ui, false);
-                        sync_log(&ui, &state);
+                let cancelled = cancel_flag.load(Ordering::Relaxed);
+
+                if cancelled || project_tuples.is_empty() {
+                    if !cancelled && !any_failed {
+                        append_to_tab(&ui, 0, "No projects to deploy.");
+                    }
+                    update_tab_status(&ui, 0, if cancelled { "Cancelled" } else if any_failed { "Failed" } else { "Done" });
+                    slint::invoke_from_event_loop({
+                        let ui = ui.clone();
+                        move || { set_busy(&ui, false); }
                     }).ok();
                     return;
                 }
 
                 // Deploy via Helm
+                append_to_tab(&ui, 0, "Deploying via Helm...");
+
+                // Detect credentials path
+                let credentials_path = dirs::home_dir()
+                    .map(|h| h.join(".claude").to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let extra_args: Vec<(&str, &str)> = if !credentials_path.is_empty() {
+                    vec![("claude.credentialsPath", &credentials_path)]
+                } else {
+                    vec![]
+                };
+
                 let result = helm_runner
-                    .install_or_upgrade(&api_key, &project_tuples)
+                    .install_or_upgrade(&project_tuples, &extra_args)
                     .await;
 
-                slint::invoke_from_event_loop(move || {
-                    match result {
-                        Ok(r) => {
-                            append_log(&state, &format_cmd_result("helm upgrade --install", &r));
+                slint::invoke_from_event_loop({
+                    let state = state.clone();
+                    let ui = ui.clone();
+                    move || {
+                        match result {
+                            Ok(r) => {
+                                let msg = format_cmd_result("helm upgrade --install", &r);
+                                append_log(&state, &msg);
+                                append_to_tab(&ui, 0, &msg);
+                                update_tab_status(&ui, 0, if r.success { "Done" } else { "Failed" });
+                            }
+                            Err(e) => {
+                                let msg = format!("Deploy error: {}", e);
+                                append_log(&state, &msg);
+                                append_to_tab(&ui, 0, &msg);
+                                update_tab_status(&ui, 0, "Failed");
+                            }
                         }
-                        Err(e) => append_log(&state, &format!("Deploy error: {}", e)),
+                        set_busy(&ui, false);
+                        sync_log(&ui, &state);
                     }
-                    set_busy(&ui, false);
-                    sync_log(&ui, &state);
-                })
-                .ok();
+                }).ok();
             });
         });
     }
@@ -684,8 +787,6 @@ fn main() -> anyhow::Result<()> {
         ui.on_save_settings(move || {
             if let Some(ui) = ui_handle.upgrade() {
                 let mut s = state.lock().unwrap();
-                let key = ui.get_api_key().to_string();
-                s.config.api_key = if key.is_empty() { None } else { Some(key) };
                 s.config.claude_mode = ui.get_claude_mode().to_string();
                 s.config.git_user_name = ui.get_git_user_name().to_string();
                 s.config.git_user_email = ui.get_git_user_email().to_string();
@@ -814,6 +915,10 @@ fn main() -> anyhow::Result<()> {
                             u.set_docker_found(true);
                             u.set_docker_version(version.clone().into());
                         }
+                        if let deps::ToolStatus::Found { ref version } = new_status_clone.claude {
+                            u.set_claude_found(true);
+                            u.set_claude_version(version.clone().into());
+                        }
                     }
                 })
                 .ok();
@@ -846,12 +951,14 @@ fn main() -> anyhow::Result<()> {
                 let ui = ui_handle.clone();
                 let state = state.clone();
 
-                let kubectl = {
+                let (kubectl, docker_builder) = {
                     let s = state.lock().unwrap();
-                    s.kubectl_runner()
+                    (s.kubectl_runner(), s.docker_builder())
                 };
 
                 rt_handle.spawn(async move {
+                    let docker_ok = docker_builder.is_running().await;
+
                     if let Ok(healthy) = kubectl.cluster_health().await {
                         let pods_result = if healthy {
                             kubectl.get_pods().await.ok()
@@ -860,17 +967,20 @@ fn main() -> anyhow::Result<()> {
                         };
 
                         slint::invoke_from_event_loop(move || {
-                            {
+                            let containers_status = {
                                 let mut s = state.lock().unwrap();
                                 s.cluster_healthy = healthy;
-                                if let Some(pods) = pods_result {
-                                    s.pods = pods;
+                                if let Some(ref pods) = pods_result {
+                                    s.pods = pods.clone();
                                 }
-                            }
+                                pods_container_status(&s.pods)
+                            };
 
                             if let Some(ui) = ui.upgrade() {
                                 let status = if healthy { "Healthy" } else { "Unreachable" };
                                 ui.set_cluster_status(status.into());
+                                ui.set_docker_status(if docker_ok { "Running" } else { "Stopped" }.into());
+                                ui.set_containers_status(containers_status.into());
                             }
                             sync_pods(&ui, &state);
                         })
@@ -882,6 +992,48 @@ fn main() -> anyhow::Result<()> {
 
         // Keep timer alive by leaking it (lives for program lifetime)
         std::mem::forget(timer);
+    }
+
+    // Check cluster health on startup
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let (kubectl, docker_builder) = {
+            let s = state.lock().unwrap();
+            (s.kubectl_runner(), s.docker_builder())
+        };
+
+        rt.handle().spawn(async move {
+            let docker_ok = docker_builder.is_running().await;
+
+            if let Ok(healthy) = kubectl.cluster_health().await {
+                let pods_result = if healthy {
+                    kubectl.get_pods().await.ok()
+                } else {
+                    None
+                };
+
+                slint::invoke_from_event_loop(move || {
+                    let containers_status = {
+                        let mut s = state.lock().unwrap();
+                        s.cluster_healthy = healthy;
+                        if let Some(ref pods) = pods_result {
+                            s.pods = pods.clone();
+                        }
+                        pods_container_status(&s.pods)
+                    };
+
+                    if let Some(ui) = ui_handle.upgrade() {
+                        let status = if healthy { "Healthy" } else { "Unreachable" };
+                        ui.set_cluster_status(status.into());
+                        ui.set_docker_status(if docker_ok { "Running" } else { "Stopped" }.into());
+                        ui.set_containers_status(containers_status.into());
+                    }
+                    sync_pods(&ui_handle, &state);
+                })
+                .ok();
+            }
+        });
     }
 
     // Load projects on startup if directory is set
@@ -930,8 +1082,10 @@ fn sync_projects(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
                 has_custom_dockerfile: p.has_custom_dockerfile,
             })
             .collect();
+        let all_selected = !s.projects.is_empty() && s.projects.iter().all(|p| p.selected);
         let model = std::rc::Rc::new(slint::VecModel::from(entries));
         ui.set_projects(model.into());
+        ui.set_all_selected(all_selected);
     }
 }
 
@@ -955,6 +1109,17 @@ fn sync_pods(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
     }
 }
 
+fn pods_container_status(pods: &[PodStatus]) -> String {
+    let running = pods.iter().filter(|p| p.phase == "Running").count();
+    if running > 0 {
+        format!("{} running", running)
+    } else if pods.is_empty() {
+        "None".to_string()
+    } else {
+        format!("0/{} running", pods.len())
+    }
+}
+
 fn format_cmd_result(cmd: &str, r: &error::CmdResult) -> String {
     let status = if r.success { "SUCCESS" } else { "FAILED" };
     let mut out = format!("[{}] {}", status, cmd);
@@ -965,6 +1130,39 @@ fn format_cmd_result(cmd: &str, r: &error::CmdResult) -> String {
         out.push_str(&format!("\nSTDERR: {}", r.stderr.trim()));
     }
     out
+}
+
+fn update_tab_status(ui: &slint::Weak<AppWindow>, idx: i32, status: &str) {
+    let ui = ui.clone();
+    let status = status.to_string();
+    slint::invoke_from_event_loop(move || {
+        if let Some(u) = ui.upgrade() {
+            let tabs = u.get_launch_tabs();
+            if let Some(mut tab) = tabs.row_data(idx as usize) {
+                tab.status = status.into();
+                tabs.set_row_data(idx as usize, tab);
+            }
+        }
+    })
+    .ok();
+}
+
+fn append_to_tab(ui: &slint::Weak<AppWindow>, idx: i32, text: &str) {
+    let ui = ui.clone();
+    let text = text.to_string();
+    slint::invoke_from_event_loop(move || {
+        if let Some(u) = ui.upgrade() {
+            let tabs = u.get_launch_tabs();
+            if let Some(mut tab) = tabs.row_data(idx as usize) {
+                let mut current = tab.log_text.to_string();
+                current.push_str(&text);
+                current.push('\n');
+                tab.log_text = current.into();
+                tabs.set_row_data(idx as usize, tab);
+            }
+        }
+    })
+    .ok();
 }
 
 fn update_install_log(ui: &slint::Weak<AppWindow>, log: &str) {

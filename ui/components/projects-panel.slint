@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { Card } from "card.slint";
 import { IconButton } from "icon-button.slint";
 import { DataRow } from "data-row.slint";
+import { LogViewer } from "log-viewer.slint";
 import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct ProjectEntry {
@@ -12,16 +13,28 @@ export struct ProjectEntry {
     has-custom-dockerfile: bool,
 }
 
+export struct LaunchTab {
+    name: string,
+    status: string,
+    log-text: string,
+}
+
 export component ProjectsPanel inherits Rectangle {
     in property <string> projects-dir: "";
     in-out property <[ProjectEntry]> projects: [];
     in property <bool> is-busy: false;
+    in property <string> launch-log: "";
     in property <[string]> base-image-options: ["Node.js", "Python", "Rust", "Go", ".NET", "Minimal", "Custom"];
+    in property <bool> all-selected: false;
+    in property <[LaunchTab]> launch-tabs: [];
+    in-out property <int> active-launch-tab: 0;
 
     callback browse-folder();
     callback refresh-projects();
     callback launch-selected();
     callback stop-selected();
+    callback cancel-launch();
+    callback toggle-select-all();
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
 
@@ -73,6 +86,12 @@ export component ProjectsPanel inherits Rectangle {
                 enabled: projects-dir != "";
                 clicked => { root.refresh-projects(); }
             }
+
+            IconButton {
+                label: all-selected ? "Deselect All" : "Select All";
+                enabled: projects.length > 0;
+                clicked => { root.toggle-select-all(); }
+            }
         }
 
         Card {
@@ -96,6 +115,7 @@ export component ProjectsPanel inherits Rectangle {
                             CheckBox {
                                 text: project.name;
                                 checked: project.selected;
+                                horizontal-stretch: 1;
                                 toggled => { root.project-toggled(idx, self.checked); }
                             }
 
@@ -111,6 +131,7 @@ export component ProjectsPanel inherits Rectangle {
                                 font-size: 11px;
                                 color: Theme.text-muted;
                                 vertical-alignment: center;
+                                min-width: 110px;
                             }
                         }
                     }
@@ -122,18 +143,80 @@ export component ProjectsPanel inherits Rectangle {
             spacing: 8px;
             alignment: start;
 
-            IconButton {
+            if !is-busy : IconButton {
                 label: "Launch Selected";
                 primary: true;
-                enabled: !is-busy;
                 clicked => { root.launch-selected(); }
             }
 
-            IconButton {
+            if is-busy : IconButton {
+                label: "Cancel";
+                destructive: true;
+                clicked => { root.cancel-launch(); }
+            }
+
+            if !is-busy : IconButton {
                 label: "Stop Selected";
                 destructive: true;
-                enabled: !is-busy;
                 clicked => { root.stop-selected(); }
+            }
+        }
+
+        if launch-tabs.length > 0 : VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 0px;
+                height: 32px;
+
+                for tab[idx] in launch-tabs : Rectangle {
+                    min-width: 80px;
+                    max-width: 200px;
+                    height: 32px;
+                    background: idx == active-launch-tab ? Theme.surface : Theme.surface-alt;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+
+                    tab-ta := TouchArea {
+                        clicked => { root.active-launch-tab = idx; }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            y: 12px;
+                            border-radius: 4px;
+                            background: tab.status == "Done" ? Theme.success :
+                                        tab.status == "Failed" ? Theme.error :
+                                        tab.status == "Cancelled" ? Theme.warning :
+                                        tab.status == "Building" || tab.status == "Importing" ? Theme.accent :
+                                        Theme.text-muted;
+                        }
+
+                        Text {
+                            text: tab.name;
+                            font-size: 11px;
+                            color: idx == active-launch-tab ? Theme.text : Theme.text-muted;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            LogViewer {
+                text: launch-tabs.length > 0 && active-launch-tab >= 0 && active-launch-tab < launch-tabs.length
+                    ? launch-tabs[active-launch-tab].log-text : "";
+                vertical-stretch: 1;
             }
         }
     }

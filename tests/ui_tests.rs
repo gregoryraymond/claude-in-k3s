@@ -19,7 +19,6 @@ fn ui_property_defaults() {
     assert!(!ui.get_is_busy());
     assert!(!ui.get_tf_initialized());
     assert_eq!(ui.get_projects_dir(), "");
-    assert_eq!(ui.get_api_key(), "");
     assert_eq!(ui.get_platform_name(), "Linux");
 
     // Check defaults for new settings properties
@@ -31,8 +30,17 @@ fn ui_property_defaults() {
     assert_eq!(ui.get_terraform_dir(), "terraform");
     assert_eq!(ui.get_helm_chart_dir(), "helm/claude-code");
 
+    assert_eq!(ui.get_docker_status(), "Unknown");
+    assert_eq!(ui.get_containers_status(), "Unknown");
+
     assert_eq!(ui.get_claude_prompt(), "");
     assert_eq!(ui.get_claude_target_pod(), "");
+
+    // -- new property defaults --
+    assert!(!ui.get_all_selected());
+    assert!(!ui.get_claude_found());
+    assert_eq!(ui.get_claude_version(), "");
+    assert_eq!(ui.get_active_launch_tab(), 0);
 
     // -- set/get cluster status --
     ui.set_cluster_status("Healthy".into());
@@ -55,10 +63,6 @@ fn ui_property_defaults() {
     // -- set/get projects_dir --
     ui.set_projects_dir("/home/user/projects".into());
     assert_eq!(ui.get_projects_dir(), "/home/user/projects");
-
-    // -- set/get api_key --
-    ui.set_api_key("sk-ant-test123".into());
-    assert_eq!(ui.get_api_key(), "sk-ant-test123");
 
     // -- set/get platform_name --
     ui.set_platform_name("WSL2".into());
@@ -89,9 +93,34 @@ fn ui_property_defaults() {
     ui.set_claude_target_pod("my-pod-123".into());
     assert_eq!(ui.get_claude_target_pod(), "my-pod-123");
 
-    // -- projects model empty by default --
-    // (reset to check model defaults on a fresh window isn't possible,
-    // but we already checked the defaults above before any sets)
+    // -- set/get all-selected --
+    ui.set_all_selected(true);
+    assert!(ui.get_all_selected());
+    ui.set_all_selected(false);
+    assert!(!ui.get_all_selected());
+
+    // -- set/get claude-found/claude-version --
+    ui.set_claude_found(true);
+    assert!(ui.get_claude_found());
+    ui.set_claude_version("1.0.5".into());
+    assert_eq!(ui.get_claude_version(), "1.0.5");
+
+    // -- set/get active-launch-tab --
+    ui.set_active_launch_tab(2);
+    assert_eq!(ui.get_active_launch_tab(), 2);
+    ui.set_active_launch_tab(0);
+
+    // -- set/get docker-status --
+    ui.set_docker_status("Running".into());
+    assert_eq!(ui.get_docker_status(), "Running");
+    ui.set_docker_status("Stopped".into());
+    assert_eq!(ui.get_docker_status(), "Stopped");
+
+    // -- set/get containers-status --
+    ui.set_containers_status("3 running".into());
+    assert_eq!(ui.get_containers_status(), "3 running");
+    ui.set_containers_status("None".into());
+    assert_eq!(ui.get_containers_status(), "None");
 
     // -- set projects model --
     let entries = vec![
@@ -122,6 +151,37 @@ fn ui_property_defaults() {
     assert!(projects.row_data(1).unwrap().selected);
     assert_eq!(projects.row_data(1).unwrap().base_image_index, 2);
     assert!(projects.row_data(1).unwrap().has_custom_dockerfile);
+
+    // -- set launch-tabs model --
+    let tabs = vec![
+        LaunchTab {
+            name: "Summary".into(),
+            status: "Building".into(),
+            log_text: "Starting build...\n".into(),
+        },
+        LaunchTab {
+            name: "my-project".into(),
+            status: "Pending".into(),
+            log_text: "".into(),
+        },
+    ];
+    let tab_model = std::rc::Rc::new(slint::VecModel::from(tabs));
+    ui.set_launch_tabs(tab_model.into());
+
+    let launch_tabs = ui.get_launch_tabs();
+    assert_eq!(launch_tabs.row_count(), 2);
+    assert_eq!(launch_tabs.row_data(0).unwrap().name, "Summary");
+    assert_eq!(launch_tabs.row_data(0).unwrap().status, "Building");
+    assert_eq!(launch_tabs.row_data(1).unwrap().name, "my-project");
+    assert_eq!(launch_tabs.row_data(1).unwrap().status, "Pending");
+
+    // -- update tab via set_row_data --
+    let mut tab0 = launch_tabs.row_data(0).unwrap();
+    tab0.status = "Done".into();
+    tab0.log_text = "All done!\n".into();
+    launch_tabs.set_row_data(0, tab0);
+    assert_eq!(launch_tabs.row_data(0).unwrap().status, "Done");
+    assert_eq!(launch_tabs.row_data(0).unwrap().log_text, "All done!\n");
 
     // -- set pods model --
     let pod_entries = vec![
@@ -185,13 +245,14 @@ fn ui_property_defaults() {
     ui.set_is_installing(false);
 
     // -- callback wiring (no panic) --
-    ui.on_terraform_init(|| {});
-    ui.on_terraform_apply(|| {});
+    ui.on_cluster_deploy(|| {});
     ui.on_terraform_destroy(|| {});
     ui.on_browse_folder(|| {});
     ui.on_refresh_projects(|| {});
     ui.on_launch_selected(|| {});
     ui.on_stop_selected(|| {});
+    ui.on_cancel_launch(|| {});
+    ui.on_toggle_select_all(|| {});
     ui.on_project_toggled(|_idx, _checked| {});
     ui.on_project_image_changed(|_idx, _img| {});
     ui.on_refresh_pods(|| {});
@@ -208,21 +269,14 @@ fn ui_property_defaults() {
     // -- callback invocation with counters --
     // Note: re-registering callbacks replaces the previous ones
 
-    // terraform_init
+    // cluster_deploy
     let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let c = counter.clone();
-    ui.on_terraform_init(move || { c.set(c.get() + 1); });
-    ui.invoke_terraform_init();
+    ui.on_cluster_deploy(move || { c.set(c.get() + 1); });
+    ui.invoke_cluster_deploy();
     assert_eq!(counter.get(), 1);
-    ui.invoke_terraform_init();
+    ui.invoke_cluster_deploy();
     assert_eq!(counter.get(), 2);
-
-    // terraform_apply
-    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
-    let c = counter.clone();
-    ui.on_terraform_apply(move || { c.set(c.get() + 1); });
-    ui.invoke_terraform_apply();
-    assert_eq!(counter.get(), 1);
 
     // terraform_destroy
     let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
@@ -271,6 +325,20 @@ fn ui_property_defaults() {
     let c = counter.clone();
     ui.on_stop_selected(move || { c.set(c.get() + 1); });
     ui.invoke_stop_selected();
+    assert_eq!(counter.get(), 1);
+
+    // cancel_launch
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_cancel_launch(move || { c.set(c.get() + 1); });
+    ui.invoke_cancel_launch();
+    assert_eq!(counter.get(), 1);
+
+    // toggle_select_all
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_toggle_select_all(move || { c.set(c.get() + 1); });
+    ui.invoke_toggle_select_all();
     assert_eq!(counter.get(), 1);
 
     // refresh_pods

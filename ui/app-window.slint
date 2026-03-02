@@ -5,12 +5,12 @@ import { IconButton } from "components/icon-button.slint";
 import { StatusBadge } from "components/status-badge.slint";
 import { FormField } from "components/form-field.slint";
 import { ClusterPanel } from "components/cluster-panel.slint";
-import { ProjectsPanel, ProjectEntry } from "components/projects-panel.slint";
+import { ProjectsPanel, ProjectEntry, LaunchTab } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
 import { SetupPanel } from "components/setup-panel.slint";
 import { ScrollView, ComboBox } from "std-widgets.slint";
 
-export { ProjectEntry, PodEntry }
+export { ProjectEntry, PodEntry, LaunchTab }
 
 export component AppWindow inherits Window {
     title: "Claude in K3s";
@@ -23,6 +23,8 @@ export component AppWindow inherits Window {
     in-out property <int> active-page: 0;
 
     in property <string> cluster-status: "Unknown";
+    in property <string> docker-status: "Unknown";
+    in property <string> containers-status: "Unknown";
     in property <string> cluster-log: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
@@ -35,7 +37,6 @@ export component AppWindow inherits Window {
     in-out property <string> claude-prompt: "";
     in property <string> claude-target-pod: "";
 
-    in-out property <string> api-key: "";
     in property <string> platform-name: "Linux";
     in-out property <string> claude-mode: "daemon";
     in-out property <string> git-user-name: "Claude Code Bot";
@@ -58,8 +59,14 @@ export component AppWindow inherits Window {
     in property <string> install-log: "";
     in property <bool> is-installing: false;
 
-    callback terraform-init();
-    callback terraform-apply();
+    in property <bool> claude-found: false;
+    in property <string> claude-version: "";
+
+    in property <bool> all-selected: false;
+    in property <[LaunchTab]> launch-tabs: [];
+    in-out property <int> active-launch-tab: 0;
+
+    callback cluster-deploy();
     callback terraform-destroy();
     callback terraform-plan();
     callback helm-status();
@@ -68,6 +75,8 @@ export component AppWindow inherits Window {
     callback refresh-projects();
     callback launch-selected();
     callback stop-selected();
+    callback cancel-launch();
+    callback toggle-select-all();
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
 
@@ -185,11 +194,13 @@ export component AppWindow inherits Window {
                 terraform-found: root.terraform-found;
                 helm-found: root.helm-found;
                 docker-found: root.docker-found;
+                claude-found: root.claude-found;
                 k3s-label: root.k3s-label;
                 k3s-version: root.k3s-version;
                 terraform-version: root.terraform-version;
                 helm-version: root.helm-version;
                 docker-version: root.docker-version;
+                claude-version: root.claude-version;
                 install-log: root.install-log;
                 is-installing: root.is-installing;
                 install-missing => { root.install-missing(); }
@@ -198,11 +209,13 @@ export component AppWindow inherits Window {
 
             if all-deps-met && active-page == 0 : ClusterPanel {
                 cluster-status: root.cluster-status;
+                docker-status: root.docker-status;
+                containers-status: root.containers-status;
+                k3s-label: root.k3s-label;
                 log-output: root.cluster-log;
                 is-busy: root.is-busy;
                 tf-initialized: root.tf-initialized;
-                terraform-init => { root.terraform-init(); }
-                terraform-apply => { root.terraform-apply(); }
+                cluster-deploy => { root.cluster-deploy(); }
                 terraform-destroy => { root.terraform-destroy(); }
                 terraform-plan => { root.terraform-plan(); }
                 helm-status => { root.helm-status(); }
@@ -212,10 +225,16 @@ export component AppWindow inherits Window {
                 projects-dir: root.projects-dir;
                 projects: root.projects;
                 is-busy: root.is-busy;
+                launch-log: root.cluster-log;
+                all-selected: root.all-selected;
+                launch-tabs: root.launch-tabs;
+                active-launch-tab <=> root.active-launch-tab;
                 browse-folder => { root.browse-folder(); }
                 refresh-projects => { root.refresh-projects(); }
                 launch-selected => { root.launch-selected(); }
                 stop-selected => { root.stop-selected(); }
+                cancel-launch => { root.cancel-launch(); }
+                toggle-select-all => { root.toggle-select-all(); }
                 project-toggled(idx, checked) => { root.project-toggled(idx, checked); }
                 project-image-changed(idx, img) => { root.project-image-changed(idx, img); }
             }
@@ -245,16 +264,6 @@ export component AppWindow inherits Window {
                             font-size: 24px;
                             font-weight: 700;
                             color: Theme.text;
-                        }
-
-                        Card {
-                            title: "Anthropic API Key";
-                            FormField {
-                                label: "API Key";
-                                text <=> root.api-key;
-                                placeholder: "sk-ant-...";
-                                is-password: true;
-                            }
                         }
 
                         Card {

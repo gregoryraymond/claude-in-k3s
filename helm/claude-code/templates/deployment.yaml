@@ -33,17 +33,17 @@ spec:
               value: {{ default $.Values.claude.mode .mode | quote }}
             - name: CLAUDE_PROMPT
               value: {{ default $.Values.claude.prompt .prompt | quote }}
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "claude-code.secretName" $ }}
-                  key: {{ $.Values.existingSecretKey }}
           envFrom:
             - configMapRef:
                 name: {{ include "claude-code.fullname" $ }}-config
           volumeMounts:
             - name: project-volume
               mountPath: /workspace
+            {{- if $.Values.claude.credentialsPath }}
+            - name: claude-credentials
+              mountPath: /home/claude/.claude
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml $.Values.resources | nindent 12 }}
           {{- if $.Values.healthCheck.enabled }}
@@ -71,6 +71,12 @@ spec:
           hostPath:
             path: {{ .path }}
             type: Directory
+        {{- if $.Values.claude.credentialsPath }}
+        - name: claude-credentials
+          hostPath:
+            path: {{ $.Values.claude.credentialsPath }}
+            type: Directory
+        {{- end }}
       {{- with $.Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

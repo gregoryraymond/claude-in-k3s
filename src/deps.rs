@@ -20,6 +20,7 @@ pub struct DepsStatus {
     pub terraform: ToolStatus,
     pub helm: ToolStatus,
     pub docker: ToolStatus,
+    pub claude: ToolStatus,
 }
 
 impl DepsStatus {
@@ -69,6 +70,7 @@ pub fn check_all(platform: &Platform) -> DepsStatus {
         terraform: check_tool(platform::terraform_binary(platform)),
         helm: check_tool(platform::helm_binary(platform)),
         docker: check_tool(platform::docker_binary(platform)),
+        claude: check_tool("claude"),
     }
 }
 
@@ -292,6 +294,7 @@ mod tests {
             terraform: ToolStatus::Found { version: "1.5.0".into() },
             helm: ToolStatus::Found { version: "3.12".into() },
             docker: ToolStatus::Found { version: "24.0".into() },
+            claude: ToolStatus::Found { version: "1.0".into() },
         };
         assert!(status.all_met());
     }
@@ -303,6 +306,7 @@ mod tests {
             terraform: ToolStatus::Missing,
             helm: ToolStatus::Found { version: "3.12".into() },
             docker: ToolStatus::Found { version: "24.0".into() },
+            claude: ToolStatus::Missing,
         };
         assert!(!status.all_met());
     }

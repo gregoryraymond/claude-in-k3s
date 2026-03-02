@@ -1,6 +1,8 @@
 use crate::error::{AppError, AppResult, CmdResult};
 use crate::projects::{BaseImage, Project};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct DockerBuilder {
@@ -16,7 +18,20 @@ impl DockerBuilder {
         }
     }
 
+    /// Check whether the Docker daemon is reachable
+    pub async fn is_running(&self) -> bool {
+        Command::new(&self.docker_binary)
+            .args(["info"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     /// Build a Docker image for a project using the template Dockerfile
+    #[allow(dead_code)]
     pub async fn build_preset(
         &self,
         base_image: &BaseImage,
@@ -46,6 +61,7 @@ impl DockerBuilder {
     }
 
     /// Build a Docker image from a project's custom Dockerfile
+    #[allow(dead_code)]
     pub async fn build_custom(
         &self,
         project: &Project,
@@ -121,7 +137,192 @@ impl DockerBuilder {
         })
     }
 
+    /// Build a Docker image for a project using the template Dockerfile, with streaming output
+    pub async fn build_preset_streaming<F>(
+        &self,
+        base_image: &BaseImage,
+        tag: &str,
+        cancel: &AtomicBool,
+        on_line: &F,
+    ) -> AppResult<CmdResult>
+    where
+        F: Fn(&str),
+    {
+        let mut child = Command::new(&self.docker_binary)
+            .args([
+                "build",
+                "--progress=plain",
+                "-t",
+                tag,
+                "--build-arg",
+                &format!("BASE_IMAGE={}", base_image.docker_image()),
+                "-f",
+                &format!("{}/Dockerfile.template", self.template_dir),
+                &self.template_dir,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Self::stream_child_output(&mut child, cancel, on_line).await
+    }
+
+    /// Build a Docker image from a project's custom Dockerfile, with streaming output
+    pub async fn build_custom_streaming<F>(
+        &self,
+        project: &Project,
+        tag: &str,
+        cancel: &AtomicBool,
+        on_line: &F,
+    ) -> AppResult<CmdResult>
+    where
+        F: Fn(&str),
+    {
+        let dockerfile = if project.path.join(".claude").join("Dockerfile").exists() {
+            project.path.join(".claude").join("Dockerfile")
+        } else if project.path.join("Dockerfile").exists() {
+            project.path.join("Dockerfile")
+        } else {
+            return Err(AppError::Docker(format!(
+                "No Dockerfile found in project '{}'",
+                project.name
+            )));
+        };
+
+        let mut child = Command::new(&self.docker_binary)
+            .args([
+                "build",
+                "--progress=plain",
+                "-t",
+                tag,
+                "-f",
+                &dockerfile.to_string_lossy(),
+                &project.path.to_string_lossy(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Self::stream_child_output(&mut child, cancel, on_line).await
+    }
+
+    /// Build and import a project's image with streaming build output
+    pub async fn build_and_import_streaming<F>(
+        &self,
+        project: &Project,
+        cancel: &AtomicBool,
+        on_line: &F,
+    ) -> AppResult<CmdResult>
+    where
+        F: Fn(&str),
+    {
+        let tag = image_tag_for_project(project);
+
+        let build_result = if project.base_image == BaseImage::Custom {
+            self.build_custom_streaming(project, &tag, cancel, on_line).await?
+        } else {
+            self.build_preset_streaming(&project.base_image, &tag, cancel, on_line).await?
+        };
+
+        if !build_result.success {
+            return Ok(build_result);
+        }
+
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(CmdResult {
+                success: false,
+                stdout: String::new(),
+                stderr: "Cancelled".into(),
+            });
+        }
+
+        on_line("Importing image to k3s...");
+        self.import_to_k3s(&tag).await
+    }
+
+    /// Read stdout/stderr from a child process line-by-line, calling on_line for each,
+    /// and checking cancel between lines.
+    async fn stream_child_output<F>(
+        child: &mut tokio::process::Child,
+        cancel: &AtomicBool,
+        on_line: &F,
+    ) -> AppResult<CmdResult>
+    where
+        F: Fn(&str),
+    {
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let mut full_stdout = String::new();
+        let mut full_stderr = String::new();
+
+        let mut stdout_reader = stdout.map(|s| BufReader::new(s).lines());
+        let mut stderr_reader = stderr.map(|s| BufReader::new(s).lines());
+
+        let mut stdout_done = stdout_reader.is_none();
+        let mut stderr_done = stderr_reader.is_none();
+
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill().await;
+                return Ok(CmdResult {
+                    success: false,
+                    stdout: full_stdout,
+                    stderr: "Cancelled by user".into(),
+                });
+            }
+
+            if stdout_done && stderr_done {
+                break;
+            }
+
+            tokio::select! {
+                line = async {
+                    if let Some(ref mut r) = stdout_reader {
+                        r.next_line().await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if !stdout_done => {
+                    match line {
+                        Ok(Some(line)) => {
+                            on_line(&line);
+                            full_stdout.push_str(&line);
+                            full_stdout.push('\n');
+                        }
+                        _ => { stdout_done = true; }
+                    }
+                }
+                line = async {
+                    if let Some(ref mut r) = stderr_reader {
+                        r.next_line().await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if !stderr_done => {
+                    match line {
+                        Ok(Some(line)) => {
+                            on_line(&line);
+                            full_stderr.push_str(&line);
+                            full_stderr.push('\n');
+                        }
+                        _ => { stderr_done = true; }
+                    }
+                }
+            }
+        }
+
+        let status = child.wait().await?;
+
+        Ok(CmdResult {
+            success: status.success(),
+            stdout: full_stdout,
+            stderr: full_stderr,
+        })
+    }
+
     /// Build and import a project's image
+    #[allow(dead_code)]
     pub async fn build_and_import(&self, project: &Project) -> AppResult<CmdResult> {
         let tag = image_tag_for_project(project);
 

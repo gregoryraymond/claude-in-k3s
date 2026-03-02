@@ -27,17 +27,6 @@ app.kubernetes.io/part-of: claude-in-k3s
 {{- end }}
 
 {{/*
-Secret name for API key
-*/}}
-{{- define "claude-code.secretName" -}}
-{{- if .Values.existingSecret }}
-{{- .Values.existingSecret }}
-{{- else }}
-{{- include "claude-code.fullname" . }}-api-key
-{{- end }}
-{{- end }}
-
-{{/*
 Sanitize project name for use as Kubernetes resource name
 */}}
 {{- define "claude-code.projectName" -}}

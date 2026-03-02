@@ -6,12 +6,16 @@ import { LogViewer } from "log-viewer.slint";
 
 export component ClusterPanel inherits Rectangle {
     in property <string> cluster-status: "Unknown";
+    in property <string> docker-status: "Unknown";
+    in property <string> containers-status: "Unknown";
+    in property <string> k3s-label: "k3s";
     in property <string> log-output: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
 
-    callback terraform-init();
-    callback terraform-apply();
+    private property <bool> show-advanced: false;
+
+    callback cluster-deploy();
     callback terraform-destroy();
     callback terraform-plan();
     callback helm-status();
@@ -37,24 +41,57 @@ export component ClusterPanel inherits Rectangle {
             StatusBadge { status: cluster-status; }
         }
 
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            IconButton {
+                label: cluster-status == "Healthy" ? "Redeploy" : "Deploy";
+                primary: true;
+                enabled: !is-busy;
+                clicked => { root.cluster-deploy(); }
+            }
+
+            IconButton {
+                label: show-advanced ? "Hide Advanced" : "Advanced";
+                enabled: true;
+                clicked => { show-advanced = !show-advanced; }
+            }
+        }
+
         Card {
-            title: "Terraform Lifecycle";
+            title: "Stack Status";
+
+            VerticalLayout {
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Docker"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
+                    StatusBadge { status: docker-status; width: 100px; }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Cluster (" + k3s-label + ")"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
+                    StatusBadge { status: cluster-status; width: 100px; }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Containers"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
+                    StatusBadge { status: containers-status; width: 100px; }
+                }
+            }
+        }
+
+        if show-advanced : Card {
+            title: "Terraform";
 
             HorizontalLayout {
                 spacing: 8px;
                 alignment: start;
 
-                IconButton {
-                    label: tf-initialized ? "Re-Init" : "Init";
-                    enabled: !is-busy;
-                    clicked => { root.terraform-init(); }
-                }
-                IconButton {
-                    label: "Apply";
-                    primary: true;
-                    enabled: !is-busy && tf-initialized;
-                    clicked => { root.terraform-apply(); }
-                }
                 IconButton {
                     label: "Plan";
                     enabled: !is-busy && tf-initialized;
@@ -69,7 +106,7 @@ export component ClusterPanel inherits Rectangle {
             }
         }
 
-        Card {
+        if show-advanced : Card {
             title: "Helm Release";
 
             HorizontalLayout {
@@ -84,7 +121,7 @@ export component ClusterPanel inherits Rectangle {
             }
         }
 
-        LogViewer {
+        if show-advanced : LogViewer {
             text: root.log-output;
             vertical-stretch: 1;
         }

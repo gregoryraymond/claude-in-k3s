@@ -37,8 +37,8 @@ impl HelmRunner {
     /// Install or upgrade with dynamic project list
     pub async fn install_or_upgrade(
         &self,
-        api_key: &str,
         projects: &[(String, String, String)], // (name, path, image)
+        extra_set_args: &[(&str, &str)],
     ) -> AppResult<CmdResult> {
         let projects_json = serde_json::to_string(
             &projects
@@ -54,10 +54,9 @@ impl HelmRunner {
         )
         .unwrap_or_else(|_| "[]".into());
 
-        let api_key_set = format!("apiKey={}", api_key);
         let projects_set = format!("projects={}", projects_json);
 
-        self.run(&[
+        let mut args = vec![
             "upgrade",
             "--install",
             &self.release_name,
@@ -65,12 +64,20 @@ impl HelmRunner {
             "--namespace",
             &self.namespace,
             "--create-namespace",
-            "--set",
-            &api_key_set,
             "--set-json",
             &projects_set,
-        ])
-        .await
+        ];
+
+        let extra_formatted: Vec<String> = extra_set_args
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        for extra in &extra_formatted {
+            args.push("--set");
+            args.push(extra);
+        }
+
+        self.run(&args).await
     }
 
     pub async fn uninstall(&self) -> AppResult<CmdResult> {
@@ -161,7 +168,7 @@ mod tests {
             "img:latest".to_string(),
         )];
 
-        let result = runner.install_or_upgrade("test-key", &projects).await.unwrap();
+        let result = runner.install_or_upgrade(&projects, &[]).await.unwrap();
         assert!(result.success);
         assert_eq!(result.stdout.trim(), "ok");
     }
@@ -176,7 +183,7 @@ mod tests {
             "img:latest".to_string(),
         )];
 
-        let result = runner.install_or_upgrade("test-key", &projects).await.unwrap();
+        let result = runner.install_or_upgrade(&projects, &[]).await.unwrap();
         assert!(!result.success);
         assert!(result.stderr.contains("helm command failed"));
     }
@@ -191,7 +198,7 @@ mod tests {
             "img:latest".to_string(),
         )];
 
-        runner.install_or_upgrade("sk-test-123", &projects).await.unwrap();
+        runner.install_or_upgrade(&projects, &[("claude.credentialsPath", "/home/user/.claude")]).await.unwrap();
 
         let args_file = dir.path().join("args");
         let recorded = fs::read_to_string(&args_file).unwrap();
@@ -199,8 +206,7 @@ mod tests {
         assert!(recorded.contains("upgrade --install"), "should contain 'upgrade --install', got: {recorded}");
         assert!(recorded.contains("--namespace"), "should contain '--namespace', got: {recorded}");
         assert!(recorded.contains("--create-namespace"), "should contain '--create-namespace', got: {recorded}");
-        assert!(recorded.contains("apiKey="), "should contain 'apiKey=', got: {recorded}");
-        assert!(recorded.contains("sk-test-123"), "should contain the api key value, got: {recorded}");
+        assert!(recorded.contains("claude.credentialsPath="), "should contain 'claude.credentialsPath=', got: {recorded}");
     }
 
     #[tokio::test]
@@ -220,7 +226,7 @@ mod tests {
             ),
         ];
 
-        runner.install_or_upgrade("key-abc", &projects).await.unwrap();
+        runner.install_or_upgrade(&projects, &[]).await.unwrap();
 
         let args_file = dir.path().join("args");
         let recorded = fs::read_to_string(&args_file).unwrap();
@@ -236,7 +242,7 @@ mod tests {
         let runner = make_runner(&binary);
         let projects: Vec<(String, String, String)> = vec![];
 
-        runner.install_or_upgrade("key-empty", &projects).await.unwrap();
+        runner.install_or_upgrade(&projects, &[]).await.unwrap();
 
         let args_file = dir.path().join("args");
         let recorded = fs::read_to_string(&args_file).unwrap();

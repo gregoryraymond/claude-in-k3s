@@ -9,13 +9,8 @@ image:
 claude:
   mode: daemon
   prompt: "Analyze this project and provide a summary."
-
-# Anthropic API key - stored as a Kubernetes secret
-apiKey: ""
-
-# Existing secret name (if set, apiKey is ignored)
-existingSecret: ""
-existingSecretKey: "ANTHROPIC_API_KEY"
+  # Path to host ~/.claude/ directory (auto-detected by GUI)
+  credentialsPath: ""
 
 # Projects to deploy - each gets its own Deployment
 # Populated dynamically by the GUI

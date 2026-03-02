@@ -9,11 +9,13 @@ export component SetupPanel inherits Rectangle {
     in property <bool> terraform-found: false;
     in property <bool> helm-found: false;
     in property <bool> docker-found: false;
+    in property <bool> claude-found: false;
     in property <string> k3s-label: "k3s";
     in property <string> k3s-version: "";
     in property <string> terraform-version: "";
     in property <string> helm-version: "";
     in property <string> docker-version: "";
+    in property <string> claude-version: "";
     in property <string> install-log: "";
     in property <bool> is-installing: false;
 
@@ -90,6 +92,17 @@ export component SetupPanel inherits Rectangle {
                     StatusBadge { status: docker-found ? "Found" : "Missing"; }
                     Text { text: "docker"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
                     Text { text: docker-found ? docker-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    height: 28px;
+                    alignment: start;
+                    StatusBadge { status: claude-found ? "Found" : "Missing"; }
+                    Text { text: "claude"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                    Text { text: claude-found ? claude-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
                 }
             }
         }

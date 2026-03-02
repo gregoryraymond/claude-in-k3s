@@ -8,6 +8,8 @@ use crate::platform::{self, Platform};
 use crate::projects::{self, Project};
 use crate::terraform::TerraformRunner;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// Shared application state
 pub struct AppState {
@@ -19,6 +21,7 @@ pub struct AppState {
     pub tf_initialized: bool,
     pub deps_status: DepsStatus,
     pub log_buffer: String,
+    pub cancel_flag: Arc<AtomicBool>,
     project_root: PathBuf,
 }
 
@@ -45,6 +48,7 @@ impl AppState {
             tf_initialized: false,
             deps_status,
             log_buffer: String::new(),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             project_root,
         })
     }
@@ -160,8 +164,10 @@ mod tests {
                 terraform: crate::deps::ToolStatus::Missing,
                 helm: crate::deps::ToolStatus::Missing,
                 docker: crate::deps::ToolStatus::Missing,
+                claude: crate::deps::ToolStatus::Missing,
             },
             log_buffer: String::new(),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             project_root: PathBuf::from("/tmp/test-root"),
         }
     }
