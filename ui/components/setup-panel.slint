@@ -1,10 +1,15 @@
-import { VerticalBox, HorizontalBox, Button, TextEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { IconButton } from "icon-button.slint";
+import { StatusBadge } from "status-badge.slint";
+import { LogViewer } from "log-viewer.slint";
+import { ScrollView } from "std-widgets.slint";
 
-export component SetupPanel inherits VerticalBox {
+export component SetupPanel inherits Rectangle {
     in property <bool> k3s-found: false;
     in property <bool> terraform-found: false;
     in property <bool> helm-found: false;
     in property <bool> docker-found: false;
+    in property <string> k3s-label: "k3s";
     in property <string> k3s-version: "";
     in property <string> terraform-version: "";
     in property <string> helm-version: "";
@@ -15,209 +20,101 @@ export component SetupPanel inherits VerticalBox {
     callback install-missing();
     callback continue-app();
 
-    padding: 24px;
-    spacing: 16px;
+    background: Theme.bg;
 
-    Text {
-        text: "Setup — Missing Dependencies";
-        font-size: 22px;
-        font-weight: 700;
-        horizontal-alignment: center;
-    }
+    VerticalLayout {
+        padding: 32px;
+        spacing: 20px;
+        alignment: start;
 
-    Text {
-        text: "The following tools are required to run Claude in K3s.";
-        font-size: 14px;
-        color: #666;
-        horizontal-alignment: center;
-    }
+        Text {
+            text: "Setup";
+            font-size: 24px;
+            font-weight: 700;
+            color: Theme.text;
+        }
 
-    Rectangle {
-        height: 1px;
-        background: #ddd;
-    }
-
-    // k3s status
-    HorizontalBox {
-        spacing: 12px;
-        height: 32px;
+        Text {
+            text: "The following tools are required to run Claude in K3s.";
+            font-size: 14px;
+            color: Theme.text-muted;
+        }
 
         Rectangle {
-            width: 20px;
-            height: 20px;
-            y: 6px;
-            border-radius: 10px;
-            background: k3s-found ? #4caf50 : #f44336;
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
 
-            Text {
-                text: k3s-found ? "✓" : "✗";
-                color: white;
-                font-size: 13px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    height: 28px;
+                    alignment: start;
+                    StatusBadge { status: k3s-found ? "Found" : "Missing"; }
+                    Text { text: k3s-label; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                    Text { text: k3s-found ? k3s-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    height: 28px;
+                    alignment: start;
+                    StatusBadge { status: terraform-found ? "Found" : "Missing"; }
+                    Text { text: "terraform"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                    Text { text: terraform-found ? terraform-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    height: 28px;
+                    alignment: start;
+                    StatusBadge { status: helm-found ? "Found" : "Missing"; }
+                    Text { text: "helm"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                    Text { text: helm-found ? helm-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    height: 28px;
+                    alignment: start;
+                    StatusBadge { status: docker-found ? "Found" : "Missing"; }
+                    Text { text: "docker"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                    Text { text: docker-found ? docker-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+                }
             }
         }
 
-        Text {
-            text: "k3s";
-            font-size: 15px;
-            font-weight: 600;
-            vertical-alignment: center;
-            min-width: 100px;
-        }
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
 
-        Text {
-            text: k3s-found ? k3s-version : "Not installed";
-            font-size: 13px;
-            color: k3s-found ? #666 : #d32f2f;
-            vertical-alignment: center;
-        }
-    }
+            IconButton {
+                label: is-installing ? "Installing..." : "Install Missing";
+                primary: true;
+                enabled: !is-installing && !(k3s-found && terraform-found && helm-found && docker-found);
+                clicked => { root.install-missing(); }
+            }
 
-    // terraform status
-    HorizontalBox {
-        spacing: 12px;
-        height: 32px;
-
-        Rectangle {
-            width: 20px;
-            height: 20px;
-            y: 6px;
-            border-radius: 10px;
-            background: terraform-found ? #4caf50 : #f44336;
-
-            Text {
-                text: terraform-found ? "✓" : "✗";
-                color: white;
-                font-size: 13px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            IconButton {
+                label: "Continue";
+                enabled: !is-installing && k3s-found && terraform-found && helm-found && docker-found;
+                clicked => { root.continue-app(); }
             }
         }
 
-        Text {
-            text: "terraform";
-            font-size: 15px;
-            font-weight: 600;
-            vertical-alignment: center;
-            min-width: 100px;
+        LogViewer {
+            text: root.install-log;
+            vertical-stretch: 1;
         }
-
-        Text {
-            text: terraform-found ? terraform-version : "Not installed";
-            font-size: 13px;
-            color: terraform-found ? #666 : #d32f2f;
-            vertical-alignment: center;
-        }
-    }
-
-    // helm status
-    HorizontalBox {
-        spacing: 12px;
-        height: 32px;
-
-        Rectangle {
-            width: 20px;
-            height: 20px;
-            y: 6px;
-            border-radius: 10px;
-            background: helm-found ? #4caf50 : #f44336;
-
-            Text {
-                text: helm-found ? "✓" : "✗";
-                color: white;
-                font-size: 13px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: "helm";
-            font-size: 15px;
-            font-weight: 600;
-            vertical-alignment: center;
-            min-width: 100px;
-        }
-
-        Text {
-            text: helm-found ? helm-version : "Not installed";
-            font-size: 13px;
-            color: helm-found ? #666 : #d32f2f;
-            vertical-alignment: center;
-        }
-    }
-
-    // docker status
-    HorizontalBox {
-        spacing: 12px;
-        height: 32px;
-
-        Rectangle {
-            width: 20px;
-            height: 20px;
-            y: 6px;
-            border-radius: 10px;
-            background: docker-found ? #4caf50 : #f44336;
-
-            Text {
-                text: docker-found ? "✓" : "✗";
-                color: white;
-                font-size: 13px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: "docker";
-            font-size: 15px;
-            font-weight: 600;
-            vertical-alignment: center;
-            min-width: 100px;
-        }
-
-        Text {
-            text: docker-found ? docker-version : "Not installed";
-            font-size: 13px;
-            color: docker-found ? #666 : #d32f2f;
-            vertical-alignment: center;
-        }
-    }
-
-    Rectangle {
-        height: 1px;
-        background: #ddd;
-    }
-
-    // Action buttons
-    HorizontalBox {
-        spacing: 12px;
-        alignment: center;
-
-        Button {
-            text: is-installing ? "Installing..." : "Install Missing";
-            enabled: !is-installing && !(k3s-found && terraform-found && helm-found && docker-found);
-            clicked => { install-missing(); }
-        }
-
-        Button {
-            text: "Continue";
-            enabled: !is-installing && k3s-found && terraform-found && helm-found && docker-found;
-            clicked => { continue-app(); }
-        }
-    }
-
-    // Install log
-    TextEdit {
-        text: install-log;
-        read-only: true;
-        font-size: 12px;
-        vertical-stretch: 1;
-        min-height: 150px;
     }
 }

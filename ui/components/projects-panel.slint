@@ -1,4 +1,8 @@
-import { Button, GroupBox, VerticalBox, HorizontalBox, LineEdit, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card } from "card.slint";
+import { IconButton } from "icon-button.slint";
+import { DataRow } from "data-row.slint";
+import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct ProjectEntry {
     name: string,
@@ -8,7 +12,7 @@ export struct ProjectEntry {
     has-custom-dockerfile: bool,
 }
 
-export component ProjectsPanel inherits VerticalBox {
+export component ProjectsPanel inherits Rectangle {
     in property <string> projects-dir: "";
     in-out property <[ProjectEntry]> projects: [];
     in property <bool> is-busy: false;
@@ -21,93 +25,116 @@ export component ProjectsPanel inherits VerticalBox {
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
 
-    padding: 16px;
-    spacing: 12px;
+    background: Theme.bg;
 
-    Text {
-        text: "Projects";
-        font-size: 20px;
-        font-weight: 700;
-    }
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
 
-    HorizontalBox {
-        spacing: 8px;
-
-        LineEdit {
-            text: projects-dir;
-            placeholder-text: "Select projects folder...";
-            read-only: true;
-            horizontal-stretch: 1;
+        Text {
+            text: "Projects";
+            font-size: 24px;
+            font-weight: 700;
+            color: Theme.text;
         }
 
-        Button {
-            text: "Browse";
-            clicked => { browse-folder(); }
-        }
+        HorizontalLayout {
+            spacing: 8px;
 
-        Button {
-            text: "Refresh";
-            enabled: projects-dir != "";
-            clicked => { refresh-projects(); }
-        }
-    }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 34px;
+                background: Theme.surface;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.border;
 
-    GroupBox {
-        title: "Project List (" + projects.length + " found)";
-        vertical-stretch: 1;
-
-        ScrollView {
-            min-height: 300px;
-
-            VerticalBox {
-                spacing: 4px;
-
-                for project[idx] in projects: HorizontalBox {
-                    spacing: 8px;
-                    height: 36px;
-
-                    CheckBox {
-                        text: project.name;
-                        checked: project.selected;
-                        toggled => {
-                            project-toggled(idx, self.checked);
-                        }
-                    }
-
-                    ComboBox {
-                        model: base-image-options;
-                        current-index: project.base-image-index;
-                        width: 120px;
-                        selected(value) => {
-                            project-image-changed(idx, self.current-index);
-                        }
-                    }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
 
                     Text {
-                        text: project.has-custom-dockerfile ? "(has Dockerfile)" : "";
-                        font-size: 11px;
-                        color: #888;
+                        text: projects-dir != "" ? projects-dir : "Select projects folder...";
+                        font-size: 13px;
+                        color: projects-dir != "" ? Theme.text : Theme.text-muted;
                         vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            IconButton {
+                label: "Browse";
+                clicked => { root.browse-folder(); }
+            }
+
+            IconButton {
+                label: "Refresh";
+                enabled: projects-dir != "";
+                clicked => { root.refresh-projects(); }
+            }
+        }
+
+        Card {
+            title: "Project List (" + projects.length + " found)";
+            vertical-stretch: 1;
+
+            ScrollView {
+                min-height: 200px;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    for project[idx] in projects: DataRow {
+                        alternate: mod(idx, 2) == 1;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+
+                            CheckBox {
+                                text: project.name;
+                                checked: project.selected;
+                                toggled => { root.project-toggled(idx, self.checked); }
+                            }
+
+                            ComboBox {
+                                model: base-image-options;
+                                current-index: project.base-image-index;
+                                width: 120px;
+                                selected(value) => { root.project-image-changed(idx, self.current-index); }
+                            }
+
+                            Text {
+                                text: project.has-custom-dockerfile ? "(has Dockerfile)" : "";
+                                font-size: 11px;
+                                color: Theme.text-muted;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
-    HorizontalBox {
-        spacing: 8px;
-        alignment: start;
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
 
-        Button {
-            text: "Launch Selected";
-            enabled: !is-busy;
-            clicked => { launch-selected(); }
-        }
+            IconButton {
+                label: "Launch Selected";
+                primary: true;
+                enabled: !is-busy;
+                clicked => { root.launch-selected(); }
+            }
 
-        Button {
-            text: "Stop Selected";
-            enabled: !is-busy;
-            clicked => { stop-selected(); }
+            IconButton {
+                label: "Stop Selected";
+                destructive: true;
+                enabled: !is-busy;
+                clicked => { root.stop-selected(); }
+            }
         }
     }
 }

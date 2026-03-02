@@ -58,10 +58,12 @@ export component IconButton inherits Rectangle {
         clicked => {
             if root.enabled { root.clicked(); }
         }
-        hovered => {
+        moved => {
             root.hovered = self.has-hover && root.enabled;
+            root.pressed = self.pressed && root.enabled;
         }
         pointer-event(event) => {
+            root.hovered = self.has-hover && root.enabled;
             root.pressed = self.pressed && root.enabled;
         }
     }

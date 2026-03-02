@@ -1,6 +1,10 @@
-import { Button, GroupBox, VerticalBox, HorizontalBox, TextEdit, StandardButton } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card } from "card.slint";
+import { IconButton } from "icon-button.slint";
+import { StatusBadge } from "status-badge.slint";
+import { LogViewer } from "log-viewer.slint";
 
-export component ClusterPanel inherits VerticalBox {
+export component ClusterPanel inherits Rectangle {
     in property <string> cluster-status: "Unknown";
     in property <string> log-output: "";
     in property <bool> is-busy: false;
@@ -12,92 +16,77 @@ export component ClusterPanel inherits VerticalBox {
     callback terraform-plan();
     callback helm-status();
 
-    padding: 16px;
-    spacing: 12px;
+    background: Theme.bg;
 
-    HorizontalBox {
-        alignment: start;
-        spacing: 8px;
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
 
-        Text {
-            text: "K3s Cluster";
-            font-size: 20px;
-            font-weight: 700;
-        }
-
-        Rectangle {
-            width: 12px;
-            height: 12px;
-            y: 8px;
-            border-radius: 6px;
-            background: cluster-status == "Healthy" ? #4caf50 :
-                        cluster-status == "Starting" ? #ff9800 : #f44336;
-        }
-
-        Text {
-            text: cluster-status;
-            font-size: 14px;
-            vertical-alignment: center;
-            color: #888;
-        }
-    }
-
-    GroupBox {
-        title: "Terraform Lifecycle";
-
-        HorizontalBox {
-            spacing: 8px;
+        HorizontalLayout {
+            spacing: 12px;
             alignment: start;
 
-            Button {
-                text: tf-initialized ? "Re-Init" : "Init";
-                enabled: !is-busy;
-                clicked => { terraform-init(); }
+            Text {
+                text: "Cluster";
+                font-size: 24px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
             }
 
-            Button {
-                text: "Apply";
-                enabled: !is-busy && tf-initialized;
-                clicked => { terraform-apply(); }
-            }
+            StatusBadge { status: cluster-status; }
+        }
 
-            Button {
-                text: "Destroy";
-                enabled: !is-busy && tf-initialized;
-                clicked => { terraform-destroy(); }
-            }
+        Card {
+            title: "Terraform Lifecycle";
 
-            Button {
-                text: "Plan";
-                enabled: !is-busy && tf-initialized;
-                clicked => { terraform-plan(); }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                IconButton {
+                    label: tf-initialized ? "Re-Init" : "Init";
+                    enabled: !is-busy;
+                    clicked => { root.terraform-init(); }
+                }
+                IconButton {
+                    label: "Apply";
+                    primary: true;
+                    enabled: !is-busy && tf-initialized;
+                    clicked => { root.terraform-apply(); }
+                }
+                IconButton {
+                    label: "Plan";
+                    enabled: !is-busy && tf-initialized;
+                    clicked => { root.terraform-plan(); }
+                }
+                IconButton {
+                    label: "Destroy";
+                    destructive: true;
+                    enabled: !is-busy && tf-initialized;
+                    clicked => { root.terraform-destroy(); }
+                }
             }
         }
-    }
 
-    GroupBox {
-        title: "Helm Release";
+        Card {
+            title: "Helm Release";
 
-        HorizontalBox {
-            spacing: 8px;
-            alignment: start;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
 
-            Button {
-                text: "Status";
-                enabled: !is-busy;
-                clicked => { helm-status(); }
+                IconButton {
+                    label: "Status";
+                    enabled: !is-busy;
+                    clicked => { root.helm-status(); }
+                }
             }
         }
-    }
 
-    GroupBox {
-        title: "Output Log";
-
-        TextEdit {
-            text: log-output;
-            read-only: true;
-            font-size: 12px;
-            min-height: 200px;
+        LogViewer {
+            text: root.log-output;
+            vertical-stretch: 1;
         }
     }
 }

@@ -1,4 +1,9 @@
-import { Button, GroupBox, VerticalBox, HorizontalBox, ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card } from "card.slint";
+import { IconButton } from "icon-button.slint";
+import { StatusBadge } from "status-badge.slint";
+import { DataRow } from "data-row.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 
 export struct PodEntry {
     name: string,
@@ -9,7 +14,7 @@ export struct PodEntry {
     age: string,
 }
 
-export component PodsPanel inherits VerticalBox {
+export component PodsPanel inherits Rectangle {
     in property <[PodEntry]> pods: [];
     in property <bool> is-busy: false;
 
@@ -21,165 +26,156 @@ export component PodsPanel inherits VerticalBox {
     in-out property <string> claude-prompt: "";
     in property <string> claude-target-pod: "";
 
-    padding: 16px;
-    spacing: 12px;
+    background: Theme.bg;
 
-    HorizontalBox {
-        alignment: space-between;
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
 
-        Text {
-            text: "Running Pods";
-            font-size: 20px;
-            font-weight: 700;
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: space-between;
+
+            Text {
+                text: "Pods";
+                font-size: 24px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+
+            IconButton {
+                label: "Refresh";
+                enabled: !is-busy;
+                clicked => { root.refresh-pods(); }
+            }
         }
 
-        Button {
-            text: "Refresh";
-            enabled: !is-busy;
-            clicked => { refresh-pods(); }
+        HorizontalLayout {
+            spacing: 4px;
+            height: 28px;
+            padding-left: 12px;
+            padding-right: 12px;
+
+            Text { text: "Project"; font-weight: 600; width: 140px; font-size: 11px; color: Theme.text-muted; }
+            Text { text: "Status"; font-weight: 600; width: 90px; font-size: 11px; color: Theme.text-muted; }
+            Text { text: "Ready"; font-weight: 600; width: 50px; font-size: 11px; color: Theme.text-muted; }
+            Text { text: "Restarts"; font-weight: 600; width: 60px; font-size: 11px; color: Theme.text-muted; }
+            Text { text: "Age"; font-weight: 600; width: 140px; font-size: 11px; color: Theme.text-muted; }
+            Text { text: "Actions"; font-weight: 600; horizontal-stretch: 1; font-size: 11px; color: Theme.text-muted; }
         }
-    }
 
-    // Table header
-    HorizontalBox {
-        spacing: 4px;
-        height: 28px;
+        Rectangle { height: 1px; background: Theme.border; }
 
-        Text { text: "Project"; font-weight: 600; width: 150px; font-size: 12px; }
-        Text { text: "Status"; font-weight: 600; width: 80px; font-size: 12px; }
-        Text { text: "Ready"; font-weight: 600; width: 60px; font-size: 12px; }
-        Text { text: "Restarts"; font-weight: 600; width: 70px; font-size: 12px; }
-        Text { text: "Age"; font-weight: 600; width: 150px; font-size: 12px; }
-        Text { text: "Actions"; font-weight: 600; horizontal-stretch: 1; font-size: 12px; }
-    }
+        ScrollView {
+            vertical-stretch: 1;
+            min-height: 200px;
 
-    Rectangle {
-        height: 1px;
-        background: #ddd;
-    }
+            VerticalLayout {
+                spacing: 0px;
 
-    ScrollView {
-        vertical-stretch: 1;
-        min-height: 200px;
+                for pod[idx] in pods: DataRow {
+                    alternate: mod(idx, 2) == 1;
 
-        VerticalBox {
-            spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        padding-left: 12px;
+                        padding-right: 12px;
 
-            for pod[idx] in pods: HorizontalBox {
-                spacing: 4px;
-                height: 36px;
+                        Text {
+                            text: pod.project;
+                            width: 140px;
+                            font-size: 13px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
 
-                Text {
-                    text: pod.project;
-                    width: 150px;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+                        HorizontalLayout {
+                            width: 90px;
+                            StatusBadge { status: pod.phase; }
+                        }
 
-                HorizontalBox {
-                    width: 80px;
-                    spacing: 4px;
+                        Text {
+                            text: pod.ready ? "Yes" : "No";
+                            width: 50px;
+                            font-size: 13px;
+                            color: pod.ready ? Theme.success : Theme.error;
+                            vertical-alignment: center;
+                        }
 
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        y: 14px;
-                        border-radius: 4px;
-                        background: pod.phase == "Running" ? #4caf50 :
-                                    pod.phase == "Pending" ? #ff9800 : #f44336;
-                    }
+                        Text {
+                            text: pod.restart-count;
+                            width: 60px;
+                            font-size: 13px;
+                            color: pod.restart-count > 3 ? Theme.error : Theme.text;
+                            vertical-alignment: center;
+                        }
 
-                    Text {
-                        text: pod.phase;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-                }
+                        Text {
+                            text: pod.age;
+                            width: 140px;
+                            font-size: 13px;
+                            color: Theme.text-muted;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
 
-                Text {
-                    text: pod.ready ? "Yes" : "No";
-                    width: 60px;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    color: pod.ready ? #4caf50 : #f44336;
-                }
+                        HorizontalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 4px;
 
-                Text {
-                    text: pod.restart-count;
-                    width: 70px;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    color: pod.restart-count > 3 ? #f44336 : #333;
-                }
+                            IconButton {
+                                label: "Logs";
+                                clicked => { root.view-logs(idx); }
+                            }
 
-                Text {
-                    text: pod.age;
-                    width: 150px;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+                            IconButton {
+                                label: "Claude";
+                                clicked => { root.exec-claude(idx); }
+                            }
 
-                HorizontalBox {
-                    horizontal-stretch: 1;
-                    spacing: 4px;
-
-                    Button {
-                        text: "Logs";
-                        height: 28px;
-                        clicked => { view-logs(idx); }
-                    }
-
-                    Button {
-                        text: "Claude";
-                        height: 28px;
-                        clicked => { exec-claude(idx); }
-                    }
-
-                    Button {
-                        text: "Delete";
-                        height: 28px;
-                        clicked => { delete-pod(idx); }
+                            IconButton {
+                                label: "Delete";
+                                destructive: true;
+                                clicked => { root.delete-pod(idx); }
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Claude prompt input (visible when a target pod is selected)
-    if claude-target-pod != "": HorizontalBox {
-        spacing: 8px;
-        height: 36px;
+        if claude-target-pod != "" : HorizontalLayout {
+            spacing: 8px;
+            height: 36px;
 
-        Text {
-            text: "Prompt for " + claude-target-pod + ":";
-            font-size: 12px;
-            vertical-alignment: center;
-            color: #666;
+            Text {
+                text: "Prompt for " + claude-target-pod + ":";
+                font-size: 12px;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                text <=> root.claude-prompt;
+                placeholder-text: "Enter a prompt for Claude...";
+                horizontal-stretch: 1;
+                font-size: 13px;
+            }
+
+            IconButton {
+                label: "Send";
+                primary: true;
+                enabled: claude-prompt != "";
+                clicked => { root.send-prompt(claude-prompt); }
+            }
         }
-
-        LineEdit {
-            text <=> claude-prompt;
-            placeholder-text: "Enter a prompt for Claude...";
-            horizontal-stretch: 1;
-        }
-
-        Button {
-            text: "Send";
-            enabled: claude-prompt != "";
-            clicked => { send-prompt(claude-prompt); }
-        }
-    }
-
-    // Summary
-    HorizontalBox {
-        spacing: 16px;
 
         Text {
             text: "Total: " + pods.length;
             font-size: 12px;
-            color: #666;
+            color: Theme.text-muted;
         }
     }
 }

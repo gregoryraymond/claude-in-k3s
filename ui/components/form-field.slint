@@ -20,7 +20,7 @@ export component FormField inherits VerticalLayout {
     LineEdit {
         text <=> root.text;
         placeholder-text: root.placeholder;
-        input-type: root.is-password ? password : text;
+        input-type: root.is-password ? InputType.password : InputType.text;
         read-only: root.read-only;
         font-size: 13px;
     }

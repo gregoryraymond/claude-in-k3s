@@ -1,8 +1,14 @@
-import { VerticalBox, HorizontalBox, Button, LineEdit, GroupBox, TabWidget, ScrollView, ComboBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { NavItem } from "components/nav-item.slint";
+import { Card } from "components/card.slint";
+import { IconButton } from "components/icon-button.slint";
+import { StatusBadge } from "components/status-badge.slint";
+import { FormField } from "components/form-field.slint";
 import { ClusterPanel } from "components/cluster-panel.slint";
 import { ProjectsPanel, ProjectEntry } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
 import { SetupPanel } from "components/setup-panel.slint";
+import { ScrollView, ComboBox } from "std-widgets.slint";
 
 export { ProjectEntry, PodEntry }
 
@@ -12,29 +18,25 @@ export component AppWindow inherits Window {
     min-height: 650px;
     preferred-width: 1024px;
     preferred-height: 768px;
+    background: Theme.bg;
 
-    // Cluster state
+    in-out property <int> active-page: 0;
+
     in property <string> cluster-status: "Unknown";
     in property <string> cluster-log: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
 
-    // Projects state
     in property <string> projects-dir: "";
     in-out property <[ProjectEntry]> projects: [];
 
-    // Pods state
     in property <[PodEntry]> pods: [];
 
-    // Claude exec state
     in-out property <string> claude-prompt: "";
     in property <string> claude-target-pod: "";
 
-    // Settings state
     in-out property <string> api-key: "";
     in property <string> platform-name: "Linux";
-
-    // Extended settings state
     in-out property <string> claude-mode: "daemon";
     in-out property <string> git-user-name: "Claude Code Bot";
     in-out property <string> git-user-email: "claude-bot@localhost";
@@ -43,12 +45,12 @@ export component AppWindow inherits Window {
     in-out property <string> terraform-dir: "terraform";
     in-out property <string> helm-chart-dir: "helm/claude-code";
 
-    // Deps state
     in property <bool> all-deps-met: true;
     in property <bool> k3s-found: false;
     in property <bool> terraform-found: false;
     in property <bool> helm-found: false;
     in property <bool> docker-found: false;
+    in property <string> k3s-label: "k3s";
     in property <string> k3s-version: "";
     in property <string> terraform-version: "";
     in property <string> helm-version: "";
@@ -56,14 +58,12 @@ export component AppWindow inherits Window {
     in property <string> install-log: "";
     in property <bool> is-installing: false;
 
-    // Cluster callbacks
     callback terraform-init();
     callback terraform-apply();
     callback terraform-destroy();
     callback terraform-plan();
     callback helm-status();
 
-    // Projects callbacks
     callback browse-folder();
     callback refresh-projects();
     callback launch-selected();
@@ -71,180 +71,197 @@ export component AppWindow inherits Window {
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
 
-    // Pods callbacks
     callback refresh-pods();
     callback delete-pod(int);
     callback view-logs(int);
     callback exec-claude(int);
     callback send-prompt(string);
 
-    // Settings callbacks
     callback save-settings();
 
-    // Deps callbacks
     callback install-missing();
     callback continue-app();
 
-    VerticalBox {
-        padding: 0px;
+    HorizontalLayout {
         spacing: 0px;
 
-        // Header bar
         Rectangle {
-            height: 48px;
-            background: #1a1a2e;
+            width: 180px;
+            background: Theme.surface-alt;
 
-            HorizontalBox {
-                padding-left: 16px;
-                padding-right: 16px;
-                alignment: space-between;
+            VerticalLayout {
+                padding-top: 16px;
+                spacing: 0px;
 
-                Text {
-                    text: "Claude in K3s";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: white;
-                    vertical-alignment: center;
-                }
-
-                HorizontalBox {
-                    spacing: 16px;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-bottom: 20px;
+                    spacing: 8px;
 
                     Text {
-                        text: "Platform: " + platform-name;
-                        font-size: 12px;
-                        color: #aaa;
+                        text: "CK3";
+                        font-size: 20px;
+                        font-weight: 800;
+                        color: Theme.accent;
                         vertical-alignment: center;
                     }
+
+                    Text {
+                        text: "Claude in K3s";
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                NavItem {
+                    icon: "\u{25B6}";
+                    label: "Cluster";
+                    active: active-page == 0;
+                    clicked => { active-page = 0; }
+                }
+
+                NavItem {
+                    icon: "\u{25A3}";
+                    label: "Projects";
+                    active: active-page == 1;
+                    clicked => { active-page = 1; }
+                }
+
+                NavItem {
+                    icon: "\u{25CB}";
+                    label: "Pods";
+                    active: active-page == 2;
+                    clicked => { active-page = 2; }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                NavItem {
+                    icon: "\u{2699}";
+                    label: "Settings";
+                    active: active-page == 3;
+                    clicked => { active-page = 3; }
+                }
+
+                HorizontalLayout {
+                    padding: 12px;
+                    spacing: 8px;
 
                     Rectangle {
-                        width: 10px;
-                        height: 10px;
-                        y: 19px;
-                        border-radius: 5px;
-                        background: cluster-status == "Healthy" ? #4caf50 :
-                                    cluster-status == "Starting" ? #ff9800 : #f44336;
+                        width: 8px;
+                        height: 8px;
+                        y: 4px;
+                        border-radius: 4px;
+                        background: cluster-status == "Healthy" ? Theme.success :
+                                    cluster-status == "Starting" ? Theme.warning : Theme.error;
                     }
 
                     Text {
-                        text: cluster-status;
-                        font-size: 12px;
-                        color: #ccc;
-                        vertical-alignment: center;
+                        text: is-busy ? "Working..." : cluster-status;
+                        font-size: 11px;
+                        color: Theme.text-muted;
                     }
                 }
             }
         }
 
-        // Setup panel — shown when deps are missing
-        if !all-deps-met : SetupPanel {
-            vertical-stretch: 1;
-            k3s-found: root.k3s-found;
-            terraform-found: root.terraform-found;
-            helm-found: root.helm-found;
-            docker-found: root.docker-found;
-            k3s-version: root.k3s-version;
-            terraform-version: root.terraform-version;
-            helm-version: root.helm-version;
-            docker-version: root.docker-version;
-            install-log: root.install-log;
-            is-installing: root.is-installing;
-
-            install-missing => { root.install-missing(); }
-            continue-app => { root.continue-app(); }
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
         }
 
-        // Tab content — shown when all deps are met
-        if all-deps-met : TabWidget {
-            vertical-stretch: 1;
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.bg;
 
-            Tab {
-                title: "Cluster";
-
-                ClusterPanel {
-                    cluster-status: root.cluster-status;
-                    log-output: root.cluster-log;
-                    is-busy: root.is-busy;
-                    tf-initialized: root.tf-initialized;
-
-                    terraform-init => { root.terraform-init(); }
-                    terraform-apply => { root.terraform-apply(); }
-                    terraform-destroy => { root.terraform-destroy(); }
-                    terraform-plan => { root.terraform-plan(); }
-                    helm-status => { root.helm-status(); }
-                }
+            if !all-deps-met : SetupPanel {
+                k3s-found: root.k3s-found;
+                terraform-found: root.terraform-found;
+                helm-found: root.helm-found;
+                docker-found: root.docker-found;
+                k3s-label: root.k3s-label;
+                k3s-version: root.k3s-version;
+                terraform-version: root.terraform-version;
+                helm-version: root.helm-version;
+                docker-version: root.docker-version;
+                install-log: root.install-log;
+                is-installing: root.is-installing;
+                install-missing => { root.install-missing(); }
+                continue-app => { root.continue-app(); }
             }
 
-            Tab {
-                title: "Projects";
-
-                ProjectsPanel {
-                    projects-dir: root.projects-dir;
-                    projects: root.projects;
-                    is-busy: root.is-busy;
-
-                    browse-folder => { root.browse-folder(); }
-                    refresh-projects => { root.refresh-projects(); }
-                    launch-selected => { root.launch-selected(); }
-                    stop-selected => { root.stop-selected(); }
-                    project-toggled(idx, checked) => { root.project-toggled(idx, checked); }
-                    project-image-changed(idx, img) => { root.project-image-changed(idx, img); }
-                }
+            if all-deps-met && active-page == 0 : ClusterPanel {
+                cluster-status: root.cluster-status;
+                log-output: root.cluster-log;
+                is-busy: root.is-busy;
+                tf-initialized: root.tf-initialized;
+                terraform-init => { root.terraform-init(); }
+                terraform-apply => { root.terraform-apply(); }
+                terraform-destroy => { root.terraform-destroy(); }
+                terraform-plan => { root.terraform-plan(); }
+                helm-status => { root.helm-status(); }
             }
 
-            Tab {
-                title: "Pods";
-
-                PodsPanel {
-                    pods: root.pods;
-                    is-busy: root.is-busy;
-
-                    refresh-pods => { root.refresh-pods(); }
-                    delete-pod(idx) => { root.delete-pod(idx); }
-                    view-logs(idx) => { root.view-logs(idx); }
-                    exec-claude(idx) => { root.exec-claude(idx); }
-                    send-prompt(prompt) => { root.send-prompt(prompt); }
-                    claude-prompt <=> root.claude-prompt;
-                    claude-target-pod: root.claude-target-pod;
-                }
+            if all-deps-met && active-page == 1 : ProjectsPanel {
+                projects-dir: root.projects-dir;
+                projects: root.projects;
+                is-busy: root.is-busy;
+                browse-folder => { root.browse-folder(); }
+                refresh-projects => { root.refresh-projects(); }
+                launch-selected => { root.launch-selected(); }
+                stop-selected => { root.stop-selected(); }
+                project-toggled(idx, checked) => { root.project-toggled(idx, checked); }
+                project-image-changed(idx, img) => { root.project-image-changed(idx, img); }
             }
 
-            Tab {
-                title: "Settings";
+            if all-deps-met && active-page == 2 : PodsPanel {
+                pods: root.pods;
+                is-busy: root.is-busy;
+                refresh-pods => { root.refresh-pods(); }
+                delete-pod(idx) => { root.delete-pod(idx); }
+                view-logs(idx) => { root.view-logs(idx); }
+                exec-claude(idx) => { root.exec-claude(idx); }
+                send-prompt(prompt) => { root.send-prompt(prompt); }
+                claude-prompt <=> root.claude-prompt;
+                claude-target-pod: root.claude-target-pod;
+            }
+
+            if all-deps-met && active-page == 3 : Rectangle {
+                background: Theme.bg;
 
                 ScrollView {
-                    VerticalBox {
-                        padding: 16px;
-                        spacing: 12px;
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 16px;
 
                         Text {
                             text: "Settings";
-                            font-size: 20px;
+                            font-size: 24px;
                             font-weight: 700;
+                            color: Theme.text;
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Anthropic API Key";
-
-                            LineEdit {
+                            FormField {
+                                label: "API Key";
                                 text <=> root.api-key;
-                                placeholder-text: "sk-ant-...";
-                                input-type: password;
+                                placeholder: "sk-ant-...";
+                                is-password: true;
                             }
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Claude Mode";
-
-                            HorizontalBox {
-                                spacing: 8px;
-
-                                Text {
-                                    text: "Mode:";
-                                    vertical-alignment: center;
-                                    font-size: 13px;
-                                }
-
+                            VerticalLayout {
+                                spacing: 4px;
+                                Text { text: "Mode"; font-size: 12px; font-weight: 500; color: Theme.text-muted; }
                                 ComboBox {
                                     model: ["daemon", "headless"];
                                     current-value <=> root.claude-mode;
@@ -252,105 +269,46 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Git Configuration";
-
-                            VerticalBox {
-                                spacing: 8px;
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "User Name:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.git-user-name; placeholder-text: "Claude Code Bot"; }
-                                }
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "Email:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.git-user-email; placeholder-text: "claude-bot@localhost"; }
-                                }
+                            VerticalLayout {
+                                spacing: 12px;
+                                FormField { label: "User Name"; text <=> root.git-user-name; placeholder: "Claude Code Bot"; }
+                                FormField { label: "Email"; text <=> root.git-user-email; placeholder: "claude-bot@localhost"; }
                             }
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Resource Limits";
-
-                            VerticalBox {
-                                spacing: 8px;
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "CPU Limit:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.cpu-limit; placeholder-text: "2"; }
-                                }
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "Memory:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.memory-limit; placeholder-text: "4Gi"; }
-                                }
+                            VerticalLayout {
+                                spacing: 12px;
+                                FormField { label: "CPU Limit"; text <=> root.cpu-limit; placeholder: "2"; }
+                                FormField { label: "Memory"; text <=> root.memory-limit; placeholder: "4Gi"; }
                             }
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Directories";
-
-                            VerticalBox {
-                                spacing: 8px;
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "Terraform:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.terraform-dir; placeholder-text: "terraform"; }
-                                }
-
-                                HorizontalBox {
-                                    spacing: 8px;
-                                    Text { text: "Helm Chart:"; width: 100px; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.helm-chart-dir; placeholder-text: "helm/claude-code"; }
-                                }
+                            VerticalLayout {
+                                spacing: 12px;
+                                FormField { label: "Terraform Directory"; text <=> root.terraform-dir; placeholder: "terraform"; }
+                                FormField { label: "Helm Chart Directory"; text <=> root.helm-chart-dir; placeholder: "helm/claude-code"; }
                             }
                         }
 
-                        GroupBox {
+                        Card {
                             title: "Platform Info";
-
-                            VerticalBox {
-                                spacing: 4px;
-
-                                Text {
-                                    text: "Detected platform: " + root.platform-name;
-                                    font-size: 13px;
-                                }
-                            }
+                            Text { text: "Detected platform: " + root.platform-name; font-size: 13px; color: Theme.text; }
                         }
 
-                        Button {
-                            text: "Save Settings";
+                        IconButton {
+                            label: "Save Settings";
+                            primary: true;
                             clicked => { root.save-settings(); }
                         }
 
-                        // Spacer
                         Rectangle { vertical-stretch: 1; }
                     }
-                }
-            }
-        }
-
-        // Status bar
-        Rectangle {
-            height: 28px;
-            background: #f0f0f0;
-
-            HorizontalBox {
-                padding-left: 12px;
-                padding-right: 12px;
-
-                Text {
-                    text: is-busy ? "Working..." : "Ready";
-                    font-size: 11px;
-                    color: #666;
-                    vertical-alignment: center;
                 }
             }
         }
