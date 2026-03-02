@@ -1,113 +1,318 @@
+<div align="center">
+
 # Claude in K3s
 
-A cross-platform Rust GUI application for managing [Claude Code](https://docs.anthropic.com/en/docs/claude-code) instances running as pods in a local [K3s](https://k3s.io/) Kubernetes cluster.
+### Sandboxed AI coding agents. No DevOps degree required.
 
-## Architecture
+*Ever wanted to sandbox Claude Code in containers but don't have 10 years of DevOps experience? Same. So we built a button for it.*
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
+[![Powered by Slint](https://img.shields.io/badge/GUI-Slint-2379F4.svg)](https://slint.dev/)
+[![K3s](https://img.shields.io/badge/Kubernetes-K3s-FFC61C.svg)](https://k3s.io/)
+
+---
 
 ```
-┌─────────────────────────────────────┐
-│          Slint GUI (4 tabs)         │
-│  Cluster │ Projects │ Pods │ Settings│
-└────┬─────┴────┬─────┴──┬──┴────┬───┘
-     │          │        │       │
-     ▼          ▼        ▼       ▼
- Terraform   Docker   Helm   kubectl
-  (k3s)     (images)  (deploy) (pods)
-     │          │        │       │
-     └──────────┴────────┴───────┘
-                 │
-            K3s Cluster
+  ┌──────────────────────────────────────────────────────────┐
+  │                                                          │
+  │   Your Code     ──►   Docker Image   ──►   K3s Pod      │
+  │                                                          │
+  │   Claude Code runs in an isolated container.             │
+  │   Your machine stays clean. Your secrets stay safe.      │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
 ```
 
-- **Cluster tab** — Terraform lifecycle (init/apply/plan/destroy) and Helm status
-- **Projects tab** — Scan a directory for projects, select base images, build Docker images, deploy via Helm
-- **Pods tab** — Monitor running pods, view logs, send prompts to Claude, delete pods
-- **Settings tab** — API key, Claude mode, git config, resource limits, directories
+</div>
 
-## Prerequisites
+---
 
-- [Rust](https://rustup.rs/) (1.70+)
-- [K3s](https://k3s.io/) installed on the host
-- [Terraform](https://www.terraform.io/) (>= 1.5.0)
-- [Helm](https://helm.sh/) (v3)
-- [Docker](https://www.docker.com/)
-- An [Anthropic API key](https://console.anthropic.com/)
-- Linux: development headers for your display server (`libxkbcommon-dev`, etc.)
+## The Problem
 
-## Build
+You want Claude Code to work on your projects. But giving an AI agent unrestricted access to your filesystem, your SSH keys, your `.env` files, and your entire `$PATH` feels... uncomfortable.
+
+**The "proper" solution** involves Kubernetes, Terraform, Helm charts, Docker builds, kubeconfig files, and a week of YAML debugging.
+
+**This solution** involves clicking a button.
+
+## What This Does
+
+Claude in K3s is a **native desktop app** that spins up a local Kubernetes cluster on your machine and runs Claude Code inside isolated containers — one per project. Each pod gets its own filesystem, its own network namespace, and exactly the permissions you give it.
+
+You get the sandboxing. You skip the 47-page runbook.
+
+---
+
+## Features
+
+<table>
+<tr>
+<td width="50%">
+
+### One-Click Infrastructure
+The app detects missing tools (K3s, Terraform, Helm, Docker) and installs them for you. Terraform provisions the cluster. Helm deploys the pods. You click buttons.
+
+### Smart Project Detection
+Point it at a directory. It finds your projects, detects the language (Node, Python, Rust, Go, .NET), picks the right base image, and builds Docker containers automatically.
+
+### Live Pod Management
+Watch pods come up in real time. Tail logs. Send prompts to Claude directly from the app. Delete pods when you're done. Everything in one window.
+
+</td>
+<td width="50%">
+
+### Resource Controls
+Set CPU and memory limits per pod. Claude gets what you give it — no runaway processes eating your machine.
+
+### Custom Dockerfiles
+Need a special setup? Drop a `Dockerfile` in `.claude/` or your project root. The app picks it up and builds from that instead.
+
+### Cross-Platform
+Runs on Linux, macOS, and Windows (WSL2). The GUI is native on every platform — no Electron, no browser, no 400MB runtime.
+
+</td>
+</tr>
+</table>
+
+---
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                                                         │
+│              Slint Native GUI                           │
+│   ┌──────────┬──────────┬────────┬──────────┐          │
+│   │ Cluster  │ Projects │  Pods  │ Settings │          │
+│   └────┬─────┴────┬─────┴───┬────┴─────┬────┘          │
+│        │          │         │          │                │
+│        ▼          ▼         ▼          ▼                │
+│   Terraform    Docker     Helm     kubectl              │
+│   (cluster)   (images)  (deploy)   (pods)              │
+│        │          │         │          │                │
+│        └──────────┴────┬────┴──────────┘                │
+│                        ▼                                │
+│                  K3s Cluster                             │
+│        ┌───────────────────────────┐                    │
+│        │  ┌─────┐ ┌─────┐ ┌─────┐ │                    │
+│        │  │ Pod │ │ Pod │ │ Pod │ │                    │
+│        │  │proj1│ │proj2│ │proj3│ │                    │
+│        │  └─────┘ └─────┘ └─────┘ │                    │
+│        └───────────────────────────┘                    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**The stack, simplified:**
+
+| Layer | Tool | What It Does |
+|-------|------|-------------|
+| **Cluster** | Terraform + K3s | Creates a lightweight Kubernetes cluster on your machine |
+| **Images** | Docker | Builds container images with your project code baked in |
+| **Deployment** | Helm | Deploys Claude Code pods with your API key and config |
+| **Interaction** | kubectl | Streams logs, executes prompts, manages pod lifecycle |
+| **You** | This app | Clicks buttons instead of writing YAML |
+
+---
+
+## Quick Start
+
+### 1. Build the app
 
 ```bash
-# Debug build
-cargo build
+# Clone the repo
+git clone https://github.com/your-org/claude-in-k3s.git
+cd claude-in-k3s
 
-# Release build (optimized, stripped)
+# Build (release mode for smaller, faster binary)
 cargo build --release
+
+# Run
+./target/release/claude-in-k3s
+```
+
+> **Requires:** Rust 1.70+. On Linux you'll also need display server headers (`libxkbcommon-dev`, etc.).
+
+### 2. Let the app handle the rest
+
+On first launch, the **Setup Panel** checks for required tools:
+
+```
+  ✓  k3s       v1.31.4     Found
+  ✗  terraform              Missing  ← Click "Install All"
+  ✗  helm                   Missing  ← and go get coffee
+  ✓  docker    v27.4.1     Found
+```
+
+The app downloads and installs whatever's missing. No `curl | bash` pipelines to memorize.
+
+### 3. Configure
+
+Head to **Settings** and enter:
+- Your **Anthropic API key**
+- A **projects directory** (where your code lives)
+- Resource limits (optional — defaults to 2 CPU / 4Gi RAM per pod)
+
+### 4. Launch
+
+1. **Cluster tab** → Click **Init**, then **Apply**. Terraform creates your K3s cluster.
+2. **Projects tab** → Select projects. Click **Launch**. Docker builds images. Helm deploys pods.
+3. **Pods tab** → Watch them come up. Send prompts. Read logs. Ship code.
+
+---
+
+## Configuration
+
+Settings persist in `~/.config/claude-in-k3s/config.toml`:
+
+```toml
+api_key = "sk-ant-..."
+projects_dir = "/home/you/projects"
+claude_mode = "daemon"          # "daemon" (persistent) or "headless" (run and exit)
+
+git_user_name = "Claude Code Bot"
+git_user_email = "claude-bot@localhost"
+
+cpu_limit = "2"
+memory_limit = "4Gi"
+
+terraform_dir = "terraform"
+helm_chart_dir = "helm/claude-code"
+```
+
+---
+
+## Project Structure
+
+```
+claude-in-k3s/
+├── src/
+│   ├── main.rs            Entry point, UI event loop, callbacks
+│   ├── app.rs             Central app state and runner factories
+│   ├── config.rs          TOML configuration management
+│   ├── deps.rs            Dependency detection and auto-install
+│   ├── docker.rs          Docker image builder
+│   ├── error.rs           Error types and command results
+│   ├── helm.rs            Helm chart deployment
+│   ├── kubectl.rs         Pod management and Claude interaction
+│   ├── platform.rs        Cross-platform detection (Linux/macOS/WSL2/Windows)
+│   ├── projects.rs        Project scanning and language detection
+│   └── terraform.rs       Terraform lifecycle management
+│
+├── ui/
+│   ├── app-window.slint           Root window with tab navigation
+│   └── components/
+│       ├── cluster-panel.slint    Terraform + Helm controls
+│       ├── projects-panel.slint   Project browser and launcher
+│       ├── pods-panel.slint       Pod monitor and prompt interface
+│       ├── settings-panel.slint   Configuration form
+│       └── setup-panel.slint     First-run dependency installer
+│
+├── helm/claude-code/       Helm chart for Claude Code pods
+├── terraform/              Terraform configs for K3s provisioning
+├── docker/                 Dockerfile template + entrypoint script
+└── tests/                  Integration and UI tests
+```
+
+---
+
+## Supported Languages
+
+The app auto-detects your project's language and selects the right base image:
+
+| Detected File | Language | Base Image |
+|--------------|----------|------------|
+| `package.json` | Node.js | `node:22-bookworm-slim` |
+| `Cargo.toml` | Rust | `rust:1.83-bookworm-slim` |
+| `go.mod` | Go | `golang:1.23-bookworm` |
+| `requirements.txt` | Python | `python:3.12-slim-bookworm` |
+| `*.csproj` | .NET | `mcr.microsoft.com/dotnet/sdk:9.0` |
+| *(none)* | Base | `debian:bookworm-slim` |
+
+Need something else? Add a `Dockerfile` to your project's `.claude/` directory or project root.
+
+---
+
+## Why K3s?
+
+[K3s](https://k3s.io/) is a certified Kubernetes distribution that runs in ~512MB of RAM. It's a single binary. It starts in seconds. It gives you real container isolation without the overhead of a full Kubernetes cluster.
+
+**Compared to alternatives:**
+
+| Approach | Isolation | Setup Complexity | Resource Overhead |
+|----------|-----------|-----------------|-------------------|
+| Run Claude on bare metal | None | Trivial | None |
+| Docker containers | Process-level | Moderate | Low |
+| **K3s pods (this project)** | **Namespace + cgroup** | **One click** | **Low** |
+| Full Kubernetes (EKS, GKE) | Full | High | High |
+
+You get real Kubernetes-grade isolation. On your laptop. Without the cloud bill.
+
+---
+
+## FAQ
+
+<details>
+<summary><strong>Is this production-ready?</strong></summary>
+
+This is designed for local development sandboxing, not production deployment. It's great for safely letting Claude work on your projects without giving it the keys to your kingdom.
+</details>
+
+<details>
+<summary><strong>Does Claude have internet access inside the pod?</strong></summary>
+
+By default, pods have outbound internet access (needed for API calls). Network policies can be configured via the Helm chart if you need tighter restrictions.
+</details>
+
+<details>
+<summary><strong>Can I run multiple Claude instances at once?</strong></summary>
+
+Yes. Each project gets its own pod. Select multiple projects in the Projects tab and launch them all at once.
+</details>
+
+<details>
+<summary><strong>What happens to my code?</strong></summary>
+
+Your project code is copied into the Docker image at build time. Changes Claude makes stay inside the container. Nothing writes back to your host filesystem unless you explicitly extract it.
+</details>
+
+<details>
+<summary><strong>Why Rust?</strong></summary>
+
+A native binary with no runtime dependencies. The release build is small, fast, and starts instantly. No "please install Node 18 and Python 3.11 and also somehow Java" prerequisites.
+</details>
+
+---
+
+## Development
+
+```bash
+# Run in debug mode
+cargo run
 
 # Run tests
 cargo test
 
 # Lint
 cargo clippy
+
+# Format
+cargo fmt
 ```
 
-## Usage
-
-```bash
-# Run the application
-cargo run
-
-# Or run the release binary
-./target/release/claude-in-k3s
-```
-
-### First-time setup
-
-1. **Settings tab**: Enter your Anthropic API key and click Save
-2. **Cluster tab**: Click Init → Apply to start the K3s cluster via Terraform
-3. **Projects tab**: Browse to a directory containing your projects
-4. Select projects and choose base images (Node, Python, Rust, Go, .NET, or custom Dockerfile)
-5. Click Launch to build Docker images and deploy pods via Helm
-6. **Pods tab**: Monitor pods, view logs, or send prompts to Claude
-
-## Configuration
-
-Settings are stored in `~/.config/claude-in-k3s/config.toml`:
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `api_key` | — | Anthropic API key |
-| `projects_dir` | — | Directory to scan for projects |
-| `claude_mode` | `daemon` | Pod mode: `daemon` (persistent) or `headless` (run and exit) |
-| `git_user_name` | `Claude Code Bot` | Git user name for commits inside pods |
-| `git_user_email` | `claude-bot@localhost` | Git email for commits inside pods |
-| `cpu_limit` | `2` | CPU limit per pod |
-| `memory_limit` | `4Gi` | Memory limit per pod |
-| `terraform_dir` | `terraform` | Path to Terraform configuration |
-| `helm_chart_dir` | `helm/claude-code` | Path to Helm chart |
-
-## Project Structure
-
-```
-├── src/
-│   ├── main.rs          # Entry point, UI callbacks
-│   ├── app.rs           # AppState, runner factories
-│   ├── config.rs        # TOML config load/save
-│   ├── error.rs         # Error types
-│   ├── platform.rs      # Platform detection
-│   ├── projects.rs      # Project scanning, base image detection
-│   ├── terraform.rs     # Terraform runner
-│   ├── helm.rs          # Helm runner
-│   ├── kubectl.rs       # Kubectl runner
-│   └── docker.rs        # Docker image builder
-├── ui/
-│   ├── app-window.slint # Root window
-│   └── components/      # Panel components
-├── helm/claude-code/    # Helm chart
-├── terraform/           # Terraform config for k3s
-├── docker/              # Dockerfile template + entrypoint
-└── tests/               # Integration tests
-```
+---
 
 ## License
 
-MIT
+[MIT](LICENSE) — Do whatever you want with it.
+
+---
+
+<div align="center">
+
+**Built with Rust, Slint, and a mass disdain for uncontained AI agents.**
+
+*If Claude is going to rewrite your codebase, it should at least do it in a sandbox.*
+
+</div>
