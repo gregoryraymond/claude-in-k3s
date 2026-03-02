@@ -1,0 +1,80 @@
+import { Button, GroupBox, VerticalBox, HorizontalBox, TextEdit, StandardButton } from "std-widgets.slint";
+
+export component ClusterPanel inherits VerticalBox {
+    in property <string> cluster-status: "Unknown";
+    in property <string> log-output: "";
+    in property <bool> is-busy: false;
+    in property <bool> tf-initialized: false;
+
+    callback terraform-init();
+    callback terraform-apply();
+    callback terraform-destroy();
+
+    padding: 16px;
+    spacing: 12px;
+
+    HorizontalBox {
+        alignment: start;
+        spacing: 8px;
+
+        Text {
+            text: "K3s Cluster";
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        Rectangle {
+            width: 12px;
+            height: 12px;
+            y: 8px;
+            border-radius: 6px;
+            background: cluster-status == "Healthy" ? #4caf50 :
+                        cluster-status == "Starting" ? #ff9800 : #f44336;
+        }
+
+        Text {
+            text: cluster-status;
+            font-size: 14px;
+            vertical-alignment: center;
+            color: #888;
+        }
+    }
+
+    GroupBox {
+        title: "Terraform Lifecycle";
+
+        HorizontalBox {
+            spacing: 8px;
+            alignment: start;
+
+            Button {
+                text: tf-initialized ? "Re-Init" : "Init";
+                enabled: !is-busy;
+                clicked => { terraform-init(); }
+            }
+
+            Button {
+                text: "Apply";
+                enabled: !is-busy && tf-initialized;
+                clicked => { terraform-apply(); }
+            }
+
+            Button {
+                text: "Destroy";
+                enabled: !is-busy && tf-initialized;
+                clicked => { terraform-destroy(); }
+            }
+        }
+    }
+
+    GroupBox {
+        title: "Output Log";
+
+        TextEdit {
+            text: log-output;
+            read-only: true;
+            font-size: 12px;
+            min-height: 200px;
+        }
+    }
+}

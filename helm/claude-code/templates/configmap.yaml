@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "claude-code.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "claude-code.labels" . | nindent 4 }}
+data:
+  GIT_USER_NAME: {{ .Values.git.userName | quote }}
+  GIT_USER_EMAIL: {{ .Values.git.userEmail | quote }}

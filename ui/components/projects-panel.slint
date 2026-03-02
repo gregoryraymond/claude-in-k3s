@@ -1,0 +1,113 @@
+import { Button, GroupBox, VerticalBox, HorizontalBox, LineEdit, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+
+export struct ProjectEntry {
+    name: string,
+    path: string,
+    selected: bool,
+    base-image-index: int,
+    has-custom-dockerfile: bool,
+}
+
+export component ProjectsPanel inherits VerticalBox {
+    in property <string> projects-dir: "";
+    in-out property <[ProjectEntry]> projects: [];
+    in property <bool> is-busy: false;
+    in property <[string]> base-image-options: ["Node.js", "Python", "Rust", "Go", ".NET", "Minimal", "Custom"];
+
+    callback browse-folder();
+    callback refresh-projects();
+    callback launch-selected();
+    callback stop-selected();
+    callback project-toggled(int, bool);
+    callback project-image-changed(int, int);
+
+    padding: 16px;
+    spacing: 12px;
+
+    Text {
+        text: "Projects";
+        font-size: 20px;
+        font-weight: 700;
+    }
+
+    HorizontalBox {
+        spacing: 8px;
+
+        LineEdit {
+            text: projects-dir;
+            placeholder-text: "Select projects folder...";
+            read-only: true;
+            horizontal-stretch: 1;
+        }
+
+        Button {
+            text: "Browse";
+            clicked => { browse-folder(); }
+        }
+
+        Button {
+            text: "Refresh";
+            enabled: projects-dir != "";
+            clicked => { refresh-projects(); }
+        }
+    }
+
+    GroupBox {
+        title: "Project List (" + projects.length + " found)";
+        vertical-stretch: 1;
+
+        ScrollView {
+            min-height: 300px;
+
+            VerticalBox {
+                spacing: 4px;
+
+                for project[idx] in projects: HorizontalBox {
+                    spacing: 8px;
+                    height: 36px;
+
+                    CheckBox {
+                        text: project.name;
+                        checked: project.selected;
+                        toggled => {
+                            project-toggled(idx, self.checked);
+                        }
+                    }
+
+                    ComboBox {
+                        model: base-image-options;
+                        current-index: project.base-image-index;
+                        width: 120px;
+                        selected(value) => {
+                            project-image-changed(idx, self.current-index);
+                        }
+                    }
+
+                    Text {
+                        text: project.has-custom-dockerfile ? "(has Dockerfile)" : "";
+                        font-size: 11px;
+                        color: #888;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalBox {
+        spacing: 8px;
+        alignment: start;
+
+        Button {
+            text: "Launch Selected";
+            enabled: !is-busy;
+            clicked => { launch-selected(); }
+        }
+
+        Button {
+            text: "Stop Selected";
+            enabled: !is-busy;
+            clicked => { stop-selected(); }
+        }
+    }
+}

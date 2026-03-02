@@ -1,0 +1,150 @@
+import { Button, GroupBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+
+export struct PodEntry {
+    name: string,
+    project: string,
+    phase: string,
+    ready: bool,
+    restart-count: int,
+    age: string,
+}
+
+export component PodsPanel inherits VerticalBox {
+    in property <[PodEntry]> pods: [];
+    in property <bool> is-busy: false;
+
+    callback refresh-pods();
+    callback delete-pod(int);
+    callback view-logs(int);
+
+    padding: 16px;
+    spacing: 12px;
+
+    HorizontalBox {
+        alignment: space-between;
+
+        Text {
+            text: "Running Pods";
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        Button {
+            text: "Refresh";
+            enabled: !is-busy;
+            clicked => { refresh-pods(); }
+        }
+    }
+
+    // Table header
+    HorizontalBox {
+        spacing: 4px;
+        height: 28px;
+
+        Text { text: "Project"; font-weight: 600; width: 150px; font-size: 12px; }
+        Text { text: "Status"; font-weight: 600; width: 80px; font-size: 12px; }
+        Text { text: "Ready"; font-weight: 600; width: 60px; font-size: 12px; }
+        Text { text: "Restarts"; font-weight: 600; width: 70px; font-size: 12px; }
+        Text { text: "Age"; font-weight: 600; width: 150px; font-size: 12px; }
+        Text { text: "Actions"; font-weight: 600; horizontal-stretch: 1; font-size: 12px; }
+    }
+
+    Rectangle {
+        height: 1px;
+        background: #ddd;
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 200px;
+
+        VerticalBox {
+            spacing: 2px;
+
+            for pod[idx] in pods: HorizontalBox {
+                spacing: 4px;
+                height: 36px;
+
+                Text {
+                    text: pod.project;
+                    width: 150px;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                HorizontalBox {
+                    width: 80px;
+                    spacing: 4px;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        y: 14px;
+                        border-radius: 4px;
+                        background: pod.phase == "Running" ? #4caf50 :
+                                    pod.phase == "Pending" ? #ff9800 : #f44336;
+                    }
+
+                    Text {
+                        text: pod.phase;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: pod.ready ? "Yes" : "No";
+                    width: 60px;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    color: pod.ready ? #4caf50 : #f44336;
+                }
+
+                Text {
+                    text: pod.restart-count;
+                    width: 70px;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    color: pod.restart-count > 3 ? #f44336 : #333;
+                }
+
+                Text {
+                    text: pod.age;
+                    width: 150px;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                HorizontalBox {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+
+                    Button {
+                        text: "Logs";
+                        height: 28px;
+                        clicked => { view-logs(idx); }
+                    }
+
+                    Button {
+                        text: "Delete";
+                        height: 28px;
+                        clicked => { delete-pod(idx); }
+                    }
+                }
+            }
+        }
+    }
+
+    // Summary
+    HorizontalBox {
+        spacing: 16px;
+
+        Text {
+            text: "Total: " + pods.length;
+            font-size: 12px;
+            color: #666;
+        }
+    }
+}

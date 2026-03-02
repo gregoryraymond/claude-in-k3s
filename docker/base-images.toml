@@ -1,0 +1,32 @@
+# Preset base images for Claude Code pods
+# Each entry maps a language key to its Docker base image
+
+[node]
+label = "Node.js / TypeScript"
+image = "node:22-bookworm-slim"
+description = "JavaScript and TypeScript projects"
+
+[python]
+label = "Python"
+image = "python:3.12-slim-bookworm"
+description = "Python projects"
+
+[rust]
+label = "Rust"
+image = "rust:1.83-slim-bookworm"
+description = "Rust projects"
+
+[go]
+label = "Go"
+image = "golang:1.23-bookworm"
+description = "Go projects"
+
+[dotnet]
+label = ".NET"
+image = "mcr.microsoft.com/dotnet/sdk:9.0"
+description = "C# and .NET projects"
+
+[base]
+label = "Minimal (Debian)"
+image = "debian:bookworm-slim"
+description = "Minimal base for projects with custom tooling"

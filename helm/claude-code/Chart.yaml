@@ -1,0 +1,10 @@
+apiVersion: v2
+name: claude-code
+description: Deploy Claude Code instances as Kubernetes pods
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - claude
+  - ai
+  - coding-assistant

@@ -1,0 +1,218 @@
+import { VerticalBox, HorizontalBox, Button, LineEdit, GroupBox, TabWidget } from "std-widgets.slint";
+import { ClusterPanel } from "components/cluster-panel.slint";
+import { ProjectsPanel, ProjectEntry } from "components/projects-panel.slint";
+import { PodsPanel, PodEntry } from "components/pods-panel.slint";
+
+export { ProjectEntry, PodEntry }
+
+export component AppWindow inherits Window {
+    title: "Claude in K3s";
+    min-width: 900px;
+    min-height: 650px;
+    preferred-width: 1024px;
+    preferred-height: 768px;
+
+    // Cluster state
+    in property <string> cluster-status: "Unknown";
+    in property <string> cluster-log: "";
+    in property <bool> is-busy: false;
+    in property <bool> tf-initialized: false;
+
+    // Projects state
+    in property <string> projects-dir: "";
+    in-out property <[ProjectEntry]> projects: [];
+
+    // Pods state
+    in property <[PodEntry]> pods: [];
+
+    // Settings state
+    in-out property <string> api-key: "";
+    in property <string> platform-name: "Linux";
+
+    // Cluster callbacks
+    callback terraform-init();
+    callback terraform-apply();
+    callback terraform-destroy();
+
+    // Projects callbacks
+    callback browse-folder();
+    callback refresh-projects();
+    callback launch-selected();
+    callback stop-selected();
+    callback project-toggled(int, bool);
+    callback project-image-changed(int, int);
+
+    // Pods callbacks
+    callback refresh-pods();
+    callback delete-pod(int);
+    callback view-logs(int);
+
+    // Settings callbacks
+    callback save-settings();
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // Header bar
+        Rectangle {
+            height: 48px;
+            background: #1a1a2e;
+
+            HorizontalBox {
+                padding-left: 16px;
+                padding-right: 16px;
+                alignment: space-between;
+
+                Text {
+                    text: "Claude in K3s";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: white;
+                    vertical-alignment: center;
+                }
+
+                HorizontalBox {
+                    spacing: 16px;
+
+                    Text {
+                        text: "Platform: " + platform-name;
+                        font-size: 12px;
+                        color: #aaa;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        y: 19px;
+                        border-radius: 5px;
+                        background: cluster-status == "Healthy" ? #4caf50 :
+                                    cluster-status == "Starting" ? #ff9800 : #f44336;
+                    }
+
+                    Text {
+                        text: cluster-status;
+                        font-size: 12px;
+                        color: #ccc;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Tab content
+        TabWidget {
+            vertical-stretch: 1;
+
+            Tab {
+                title: "Cluster";
+
+                ClusterPanel {
+                    cluster-status: root.cluster-status;
+                    log-output: root.cluster-log;
+                    is-busy: root.is-busy;
+                    tf-initialized: root.tf-initialized;
+
+                    terraform-init => { root.terraform-init(); }
+                    terraform-apply => { root.terraform-apply(); }
+                    terraform-destroy => { root.terraform-destroy(); }
+                }
+            }
+
+            Tab {
+                title: "Projects";
+
+                ProjectsPanel {
+                    projects-dir: root.projects-dir;
+                    projects: root.projects;
+                    is-busy: root.is-busy;
+
+                    browse-folder => { root.browse-folder(); }
+                    refresh-projects => { root.refresh-projects(); }
+                    launch-selected => { root.launch-selected(); }
+                    stop-selected => { root.stop-selected(); }
+                    project-toggled(idx, checked) => { root.project-toggled(idx, checked); }
+                    project-image-changed(idx, img) => { root.project-image-changed(idx, img); }
+                }
+            }
+
+            Tab {
+                title: "Pods";
+
+                PodsPanel {
+                    pods: root.pods;
+                    is-busy: root.is-busy;
+
+                    refresh-pods => { root.refresh-pods(); }
+                    delete-pod(idx) => { root.delete-pod(idx); }
+                    view-logs(idx) => { root.view-logs(idx); }
+                }
+            }
+
+            Tab {
+                title: "Settings";
+
+                VerticalBox {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Settings";
+                        font-size: 20px;
+                        font-weight: 700;
+                    }
+
+                    GroupBox {
+                        title: "Anthropic API Key";
+
+                        LineEdit {
+                            text <=> root.api-key;
+                            placeholder-text: "sk-ant-...";
+                            input-type: password;
+                        }
+                    }
+
+                    GroupBox {
+                        title: "Platform Info";
+
+                        VerticalBox {
+                            spacing: 4px;
+
+                            Text {
+                                text: "Detected platform: " + root.platform-name;
+                                font-size: 13px;
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "Save Settings";
+                        clicked => { root.save-settings(); }
+                    }
+
+                    // Spacer
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
+        // Status bar
+        Rectangle {
+            height: 28px;
+            background: #f0f0f0;
+
+            HorizontalBox {
+                padding-left: 12px;
+                padding-right: 12px;
+
+                Text {
+                    text: is-busy ? "Working..." : "Ready";
+                    font-size: 11px;
+                    color: #666;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

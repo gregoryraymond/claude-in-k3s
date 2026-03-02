@@ -1,0 +1,49 @@
+namespace: claude-code
+
+# Default image (overridden per-project when using presets)
+image:
+  repository: claude-code
+  tag: latest
+  pullPolicy: IfNotPresent
+
+claude:
+  mode: daemon
+  prompt: "Analyze this project and provide a summary."
+
+# Anthropic API key - stored as a Kubernetes secret
+apiKey: ""
+
+# Existing secret name (if set, apiKey is ignored)
+existingSecret: ""
+existingSecretKey: "ANTHROPIC_API_KEY"
+
+# Projects to deploy - each gets its own Deployment
+# Populated dynamically by the GUI
+projects: []
+# - name: my-project
+#   path: /home/user/projects/my-project
+#   image: claude-code-node:latest
+
+# Git configuration for pods
+git:
+  userName: "Claude Code Bot"
+  userEmail: "claude-bot@localhost"
+
+# Pod resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+nodeSelector: {}
+tolerations: []
+
+healthCheck:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3

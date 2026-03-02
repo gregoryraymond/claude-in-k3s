@@ -1,0 +1,82 @@
+{{- range .Values.projects }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-{{ include "claude-code.projectName" .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "claude-code.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: claude-pod
+    claude-code/project: {{ include "claude-code.projectName" .name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "claude-code.name" $ }}
+      claude-code/project: {{ include "claude-code.projectName" .name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "claude-code.name" $ }}
+        claude-code/project: {{ include "claude-code.projectName" .name }}
+      annotations:
+        claude-code/project-path: {{ .path | quote }}
+    spec:
+      serviceAccountName: {{ include "claude-code.fullname" $ }}
+      containers:
+        - name: claude-code
+          image: {{ default (printf "%s:%s" $.Values.image.repository $.Values.image.tag) .image | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          env:
+            - name: CLAUDE_MODE
+              value: {{ default $.Values.claude.mode .mode | quote }}
+            - name: CLAUDE_PROMPT
+              value: {{ default $.Values.claude.prompt .prompt | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "claude-code.secretName" $ }}
+                  key: {{ $.Values.existingSecretKey }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "claude-code.fullname" $ }}-config
+          volumeMounts:
+            - name: project-volume
+              mountPath: /workspace
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          {{- if $.Values.healthCheck.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "pgrep -f 'tail -f' || pgrep -f 'claude' || exit 1"
+            initialDelaySeconds: {{ $.Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ $.Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ $.Values.healthCheck.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "claude --version > /dev/null 2>&1"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- end }}
+      volumes:
+        - name: project-volume
+          hostPath:
+            path: {{ .path }}
+            type: Directory
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
