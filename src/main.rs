@@ -1,5 +1,7 @@
 mod app;
 mod config;
+#[allow(dead_code)]
+mod deps;
 mod docker;
 mod error;
 mod helm;
