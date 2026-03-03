@@ -433,11 +433,11 @@ fn main() -> anyhow::Result<()> {
             let ui = ui_handle.clone();
             let state = state.clone();
 
-            let (selected_projects, docker_builder, helm_runner, cancel_flag) = {
+            let (selected_projects, docker_builder, helm_runner, cancel_flag, plat) = {
                 let s = state.lock().unwrap();
                 s.cancel_flag.store(false, Ordering::Relaxed);
                 let projects = s.selected_projects().into_iter().cloned().collect::<Vec<_>>();
-                (projects, s.docker_builder(), s.helm_runner(), s.cancel_flag.clone())
+                (projects, s.docker_builder(), s.helm_runner(), s.cancel_flag.clone(), s.platform.clone())
             };
 
             if selected_projects.is_empty() {
@@ -501,9 +501,11 @@ fn main() -> anyhow::Result<()> {
                     match docker_builder.build_and_import_streaming(project, &cancel_flag, &on_line).await {
                         Ok(r) if r.success => {
                             let tag = docker::image_tag_for_project(project);
+                            let host_path = project.path.to_string_lossy().to_string();
+                            let container_path = platform::to_k3d_container_path(&host_path, &plat);
                             project_tuples.push((
                                 project.name.clone(),
-                                project.path.to_string_lossy().to_string(),
+                                container_path,
                                 tag,
                             ));
                             update_tab_status(&ui, tab_idx, "Done");
@@ -542,9 +544,12 @@ fn main() -> anyhow::Result<()> {
                 // Deploy via Helm
                 append_to_tab(&ui, 0, "Deploying via Helm...");
 
-                // Detect credentials path
+                // Detect credentials path (convert for k3d on Windows)
                 let credentials_path = dirs::home_dir()
-                    .map(|h| h.join(".claude").to_string_lossy().to_string())
+                    .map(|h| {
+                        let host_path = h.join(".claude").to_string_lossy().to_string();
+                        platform::to_k3d_container_path(&host_path, &plat)
+                    })
                     .unwrap_or_default();
 
                 let extra_args: Vec<(&str, &str)> = if !credentials_path.is_empty() {

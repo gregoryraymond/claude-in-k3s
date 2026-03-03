@@ -33,3 +33,9 @@ variable "cluster_memory_limit" {
   type        = string
   default     = "12800m"
 }
+
+variable "k3d_volume_mounts" {
+  description = "Volume mounts for k3d cluster (host:container@nodefilter format)"
+  type        = list(string)
+  default     = []
+}

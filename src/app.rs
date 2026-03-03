@@ -93,13 +93,42 @@ impl AppState {
         };
         let vars_path = PathBuf::from(self.terraform_dir()).join("terraform.auto.tfvars");
         let memory_limit = self.compute_cluster_memory_limit();
-        std::fs::write(
-            &vars_path,
-            format!(
-                "platform = \"{}\"\ncluster_memory_limit = \"{}m\"\n",
-                platform_str, memory_limit
-            ),
-        )?;
+
+        let mut content = format!(
+            "platform = \"{}\"\ncluster_memory_limit = \"{}m\"\n",
+            platform_str, memory_limit
+        );
+
+        // On Windows (k3d), generate volume mount flags so host paths
+        // are accessible inside the k3d container.
+        if self.platform == Platform::Windows {
+            let mut volume_flags = Vec::new();
+
+            // Mount projects directory if configured
+            if let Some(ref projects_dir) = self.config.projects_dir {
+                let container_path =
+                    platform::to_k3d_container_path(projects_dir, &self.platform);
+                volume_flags.push(platform::k3d_volume_flag(projects_dir, &container_path));
+            }
+
+            // Mount credentials directory (~/.claude)
+            if let Some(home) = dirs::home_dir() {
+                let claude_dir = home.join(".claude");
+                let host_path = claude_dir.to_string_lossy().to_string();
+                let container_path =
+                    platform::to_k3d_container_path(&host_path, &self.platform);
+                volume_flags.push(platform::k3d_volume_flag(&host_path, &container_path));
+            }
+
+            if !volume_flags.is_empty() {
+                content.push_str(&format!(
+                    "k3d_volume_mounts = {}\n",
+                    serde_json::to_string(&volume_flags).unwrap_or_else(|_| "[]".into())
+                ));
+            }
+        }
+
+        std::fs::write(&vars_path, content)?;
         Ok(())
     }
 

@@ -99,6 +99,38 @@ pub fn detect_arch() -> &'static str {
     }
 }
 
+/// Convert a Windows path to a k3d container-compatible path.
+///
+/// k3d runs k3s inside a Docker container. hostPath volumes in k3d
+/// reference the container's filesystem, not the Windows host.
+/// Docker Desktop mounts Windows drives inside containers, so
+/// `C:\Users\Greg\repos` becomes `/mnt/c/Users/Greg/repos`.
+///
+/// On non-Windows platforms, returns the path unchanged.
+pub fn to_k3d_container_path(path: &str, platform: &Platform) -> String {
+    if *platform != Platform::Windows {
+        return path.to_string();
+    }
+
+    let path = path.replace('\\', "/");
+
+    // Match "C:/..." or "c:/..."
+    if path.len() >= 2 && path.as_bytes()[1] == b':' {
+        let drive = (path.as_bytes()[0] as char).to_ascii_lowercase();
+        let rest = &path[2..]; // "/Users/Greg/..."
+        return format!("/mnt/{}{}", drive, rest);
+    }
+
+    path
+}
+
+/// Convert a k3d container path back to a Windows host path for `--volume` flags.
+/// The k3d `--volume` flag expects `HOST_PATH:CONTAINER_PATH@NODEFILTER`.
+/// On Windows, the host path should remain as a Windows path.
+pub fn k3d_volume_flag(host_path: &str, container_path: &str) -> String {
+    format!("{}:{}@server:0", host_path, container_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +242,35 @@ mod tests {
     #[test]
     fn k8s_provider_name_windows() {
         assert_eq!(k8s_provider_name(&Platform::Windows), "k3d");
+    }
+
+    #[test]
+    fn to_k3d_path_windows_backslashes() {
+        let result = to_k3d_container_path(r"C:\Users\Greg\repos\day-trading", &Platform::Windows);
+        assert_eq!(result, "/mnt/c/Users/Greg/repos/day-trading");
+    }
+
+    #[test]
+    fn to_k3d_path_windows_forward_slashes() {
+        let result = to_k3d_container_path("C:/Users/Greg/.claude", &Platform::Windows);
+        assert_eq!(result, "/mnt/c/Users/Greg/.claude");
+    }
+
+    #[test]
+    fn to_k3d_path_lowercase_drive() {
+        let result = to_k3d_container_path(r"d:\data\projects", &Platform::Windows);
+        assert_eq!(result, "/mnt/d/data/projects");
+    }
+
+    #[test]
+    fn to_k3d_path_linux_unchanged() {
+        let result = to_k3d_container_path("/home/user/projects", &Platform::Linux);
+        assert_eq!(result, "/home/user/projects");
+    }
+
+    #[test]
+    fn k3d_volume_flag_format() {
+        let flag = k3d_volume_flag(r"C:\Users\Greg\repos", "/mnt/c/Users/Greg/repos");
+        assert_eq!(flag, r"C:\Users\Greg\repos:/mnt/c/Users/Greg/repos@server:0");
     }
 }
