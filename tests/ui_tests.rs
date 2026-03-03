@@ -192,6 +192,7 @@ fn ui_property_defaults() {
             ready: true,
             restart_count: 0,
             age: "2026-03-02T10:00:00Z".into(),
+            warnings: "".into(),
         },
         PodEntry {
             name: "claude-backend-def".into(),
@@ -200,6 +201,7 @@ fn ui_property_defaults() {
             ready: false,
             restart_count: 5,
             age: "2026-03-02T09:30:00Z".into(),
+            warnings: "FailedMount: path not found".into(),
         },
     ];
     let pod_model = std::rc::Rc::new(slint::VecModel::from(pod_entries));

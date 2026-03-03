@@ -13,6 +13,7 @@ export struct PodEntry {
     ready: bool,
     restart-count: int,
     age: string,
+    warnings: string,
 }
 
 export component PodsPanel inherits Rectangle {
@@ -76,71 +77,106 @@ export component PodsPanel inherits Rectangle {
             VerticalLayout {
                 spacing: 0px;
 
-                for pod[idx] in pods: DataRow {
-                    alternate: mod(idx, 2) == 1;
+                for pod[idx] in pods: Rectangle {
+                    background: mod(idx, 2) == 1 ? Theme.surface-alt : transparent;
+                    height: self.preferred-height;
 
-                    HorizontalLayout {
-                        spacing: 4px;
-                        padding-left: 12px;
-                        padding-right: 12px;
+                    VerticalLayout {
+                        spacing: 0px;
 
-                        Text {
-                            text: pod.project;
-                            width: 140px;
-                            font-size: 13px;
-                            color: Theme.text;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
+                        DataRow {
+                            alternate: false;
 
-                        HorizontalLayout {
-                            width: 90px;
-                            StatusBadge { status: pod.phase; }
-                        }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                padding-left: 12px;
+                                padding-right: 12px;
 
-                        Text {
-                            text: pod.ready ? "Yes" : "No";
-                            width: 50px;
-                            font-size: 13px;
-                            color: pod.ready ? Theme.success : Theme.error;
-                            vertical-alignment: center;
-                        }
+                                Text {
+                                    text: pod.project;
+                                    width: 140px;
+                                    font-size: 13px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
 
-                        Text {
-                            text: pod.restart-count;
-                            width: 60px;
-                            font-size: 13px;
-                            color: pod.restart-count > 3 ? Theme.error : Theme.text;
-                            vertical-alignment: center;
-                        }
+                                HorizontalLayout {
+                                    width: 90px;
+                                    StatusBadge { status: pod.phase; }
+                                }
 
-                        Text {
-                            text: pod.age;
-                            width: 140px;
-                            font-size: 13px;
-                            color: Theme.text-muted;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
+                                Text {
+                                    text: pod.ready ? "Yes" : "No";
+                                    width: 50px;
+                                    font-size: 13px;
+                                    color: pod.ready ? Theme.success : Theme.error;
+                                    vertical-alignment: center;
+                                }
 
-                        HorizontalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 4px;
+                                Text {
+                                    text: pod.restart-count;
+                                    width: 60px;
+                                    font-size: 13px;
+                                    color: pod.restart-count > 3 ? Theme.error : Theme.text;
+                                    vertical-alignment: center;
+                                }
 
-                            IconButton {
-                                label: "Logs";
-                                clicked => { root.view-logs(idx); }
+                                Text {
+                                    text: pod.age;
+                                    width: 140px;
+                                    font-size: 13px;
+                                    color: Theme.text-muted;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+
+                                HorizontalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+
+                                    IconButton {
+                                        label: "Logs";
+                                        clicked => { root.view-logs(idx); }
+                                    }
+
+                                    IconButton {
+                                        label: "Claude";
+                                        clicked => { root.exec-claude(idx); }
+                                    }
+
+                                    IconButton {
+                                        label: "Delete";
+                                        destructive: true;
+                                        clicked => { root.delete-pod(idx); }
+                                    }
+                                }
                             }
+                        }
 
-                            IconButton {
-                                label: "Claude";
-                                clicked => { root.exec-claude(idx); }
-                            }
+                        if pod.warnings != "" : Rectangle {
+                            height: self.preferred-height;
+                            background: transparent;
 
-                            IconButton {
-                                label: "Delete";
-                                destructive: true;
-                                clicked => { root.delete-pod(idx); }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                padding-left: 24px;
+                                padding-top: 2px;
+                                padding-bottom: 6px;
+
+                                Text {
+                                    text: "\u{26A0}";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: pod.warnings;
+                                    font-size: 11px;
+                                    color: Theme.error;
+                                    wrap: word-wrap;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }

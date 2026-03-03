@@ -11,6 +11,8 @@ pub struct PodStatus {
     pub ready: bool,
     pub restart_count: u32,
     pub age: String,
+    /// Specific error/warning badges derived from container state and events.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +137,58 @@ impl KubectlRunner {
                     })
                     .unwrap_or(phase);
 
+                // Collect warnings from container state, terminated state, and conditions
+                let mut warnings = Vec::new();
+
+                if let Some(cs) = container_statuses.and_then(|cs| cs.first()) {
+                    // Waiting message (e.g. "Back-off pulling image...")
+                    if let Some(msg) = cs["state"]["waiting"]["message"].as_str() {
+                        let short = truncate_warning(msg);
+                        if !short.is_empty() {
+                            warnings.push(short);
+                        }
+                    }
+                    // Terminated reason (e.g. OOMKilled, Error)
+                    if let Some(reason) = cs["state"]["terminated"]["reason"].as_str() {
+                        if reason != "Completed" {
+                            warnings.push(reason.to_string());
+                        }
+                    }
+                    // Previous termination (last crash reason)
+                    if let Some(reason) = cs["lastState"]["terminated"]["reason"].as_str() {
+                        if reason != "Completed" {
+                            warnings.push(format!("Last: {}", reason));
+                        }
+                    }
+                    if let Some(exit_code) = cs["lastState"]["terminated"]["exitCode"].as_i64() {
+                        if exit_code != 0 {
+                            warnings.push(format!("Exit: {}", exit_code));
+                        }
+                    }
+                }
+
+                // Pod conditions (scheduling, init failures)
+                if let Some(conditions) = item["status"]["conditions"].as_array() {
+                    for cond in conditions {
+                        let status = cond["status"].as_str().unwrap_or("");
+                        let ctype = cond["type"].as_str().unwrap_or("");
+                        if status == "False" {
+                            if let Some(reason) = cond["reason"].as_str() {
+                                match reason {
+                                    "Unschedulable" => warnings.push("Unschedulable".into()),
+                                    _ if ctype == "PodScheduled" => {
+                                        warnings.push(format!("Scheduling: {}", reason));
+                                    }
+                                    _ if ctype == "Initialized" => {
+                                        warnings.push(format!("Init: {}", reason));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let age = format_age(
                     item["metadata"]["creationTimestamp"]
                         .as_str()
@@ -148,6 +202,7 @@ impl KubectlRunner {
                     ready,
                     restart_count,
                     age,
+                    warnings,
                 });
             }
         }
@@ -231,6 +286,94 @@ impl KubectlRunner {
         self.run(&["delete", "pod", "-n", &self.namespace, pod_name])
             .await
     }
+
+    /// Fetch recent events in the namespace and enrich pods with event-sourced warnings.
+    pub async fn enrich_pods_with_events(&self, pods: &mut [PodStatus]) -> AppResult<()> {
+        let result = self
+            .run(&["get", "events", "-n", &self.namespace, "-o", "json"])
+            .await?;
+
+        if !result.success {
+            return Ok(());
+        }
+
+        let events: serde_json::Value = match serde_json::from_str(&result.stdout) {
+            Ok(v) => v,
+            Err(_) => return Ok(()),
+        };
+
+        let items = match events["items"].as_array() {
+            Some(items) => items,
+            None => return Ok(()),
+        };
+
+        for event in items {
+            let event_type = event["type"].as_str().unwrap_or("");
+            if event_type != "Warning" {
+                continue;
+            }
+
+            let involved_name = event["involvedObject"]["name"].as_str().unwrap_or("");
+            let reason = event["reason"].as_str().unwrap_or("");
+            let message = event["message"].as_str().unwrap_or("");
+
+            // Match event to a pod
+            for pod in pods.iter_mut() {
+                if involved_name != pod.name {
+                    continue;
+                }
+
+                let warning = match reason {
+                    "FailedMount" | "FailedAttachVolume" => {
+                        Some(format!("FailedMount: {}", truncate_warning(message)))
+                    }
+                    "FailedScheduling" => {
+                        Some(format!("FailedScheduling: {}", truncate_warning(message)))
+                    }
+                    "FailedCreate" => {
+                        Some(format!("FailedCreate: {}", truncate_warning(message)))
+                    }
+                    "BackOff" => Some("CrashBackOff".into()),
+                    "Unhealthy" => {
+                        Some(format!("Unhealthy: {}", truncate_warning(message)))
+                    }
+                    "InsufficientCPU" | "InsufficientMemory" => {
+                        Some(reason.to_string())
+                    }
+                    "FailedCreatePodSandBox" => {
+                        Some(format!("SandboxFailed: {}", truncate_warning(message)))
+                    }
+                    _ => None,
+                };
+
+                if let Some(w) = warning {
+                    if !pod.warnings.contains(&w) {
+                        pod.warnings.push(w);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Truncate a warning message to a reasonable badge length.
+fn truncate_warning(msg: &str) -> String {
+    // Take first meaningful clause (up to first comma, semicolon, or 80 chars)
+    let trimmed = msg.trim();
+    let end = trimmed
+        .find(|c: char| c == ';')
+        .or_else(|| {
+            // Allow one comma (for messages like "path X is not a directory"),
+            // truncate at the second comma
+            trimmed
+                .find(',')
+                .and_then(|first| trimmed[first + 1..].find(',').map(|second| first + 1 + second))
+        })
+        .unwrap_or(trimmed.len())
+        .min(80);
+    trimmed[..end].to_string()
 }
 
 #[cfg(all(test, unix))]
@@ -531,6 +674,7 @@ ENDJSON
             ready: true,
             restart_count: 3,
             age: "2025-01-01T00:00:00Z".to_string(),
+            warnings: vec!["OOMKilled".to_string()],
         };
 
         let cloned = pod.clone();
@@ -541,6 +685,7 @@ ENDJSON
         assert_eq!(pod.ready, cloned.ready);
         assert_eq!(pod.restart_count, cloned.restart_count);
         assert_eq!(pod.age, cloned.age);
+        assert_eq!(pod.warnings, cloned.warnings);
     }
 
     #[test]

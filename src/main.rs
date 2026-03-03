@@ -648,7 +648,8 @@ fn main() -> anyhow::Result<()> {
                         let s = state.lock().unwrap();
                         s.kubectl_runner()
                     };
-                    if let Ok(pods) = kubectl.get_pods().await {
+                    if let Ok(mut pods) = kubectl.get_pods().await {
+                        let _ = kubectl.enrich_pods_with_events(&mut pods).await;
                         let state2 = state.clone();
                         let ui2 = ui.clone();
                         slint::invoke_from_event_loop(move || {
@@ -1178,7 +1179,12 @@ fn main() -> anyhow::Result<()> {
 
             if let Ok(healthy) = kubectl.cluster_health().await {
                 let pods_result = if healthy {
-                    kubectl.get_pods().await.ok()
+                    if let Ok(mut pods) = kubectl.get_pods().await {
+                        let _ = kubectl.enrich_pods_with_events(&mut pods).await;
+                        Some(pods)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1229,11 +1235,14 @@ fn main() -> anyhow::Result<()> {
                     (s.docker_builder(), s.kubectl_runner(), s.helm_runner())
                 };
 
-                let (report, pods) = health::full_check(
+                let (report, mut pods) = health::full_check(
                     &docker_builder,
                     &kubectl,
                     &helm_runner,
                 ).await;
+
+                // Enrich pods with event-sourced warnings
+                let _ = kubectl.enrich_pods_with_events(&mut pods).await;
 
                 // Check for recoverable pod issues
                 let pod_actions = recovery::diagnose_pod_issues(&pods);
@@ -1384,6 +1393,7 @@ fn sync_pods(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
                 ready: p.ready,
                 restart_count: p.restart_count as i32,
                 age: p.age.clone().into(),
+                warnings: p.warnings.join(" | ").into(),
             })
             .collect();
         let model = std::rc::Rc::new(slint::VecModel::from(entries));
