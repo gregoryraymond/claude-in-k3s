@@ -5,6 +5,7 @@ const MAX_RECOVERY_ATTEMPTS: u32 = 2;
 
 /// Identifies which recovery action to take based on error output.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum RecoveryAction {
     /// Fix Helm namespace ownership labels and retry.
     FixNamespaceOwnership,
@@ -47,6 +48,7 @@ pub fn diagnose_helm_failure(stderr: &str) -> Option<RecoveryAction> {
 }
 
 /// Analyze stderr for k3d/cluster failures.
+#[allow(dead_code)]
 pub fn diagnose_cluster_failure(stderr: &str) -> Option<RecoveryAction> {
     let stderr_lower = stderr.to_lowercase();
     if stderr_lower.contains("k3d")
@@ -154,10 +156,12 @@ impl RecoveryTracker {
         self.helm_attempts += 1;
     }
 
+    #[allow(dead_code)]
     pub fn can_retry_cluster(&self) -> bool {
         self.cluster_attempts < MAX_RECOVERY_ATTEMPTS
     }
 
+    #[allow(dead_code)]
     pub fn record_cluster_attempt(&mut self) {
         self.cluster_attempts += 1;
     }

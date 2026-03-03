@@ -14,6 +14,7 @@ pub struct PodStatus {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct NodeStatus {
     pub name: String,
     pub ready: bool,
