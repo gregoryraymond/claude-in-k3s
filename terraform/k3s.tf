@@ -80,8 +80,8 @@ resource "terraform_data" "k3d_cluster_create" {
       if ($existing) {
         Write-Host "k3d cluster 'claude-code' already exists"
       } else {
-        Write-Host "Creating k3d cluster..."
-        k3d cluster create claude-code --wait --timeout 120s
+        Write-Host "Creating k3d cluster with memory limit ${var.cluster_memory_limit}..."
+        k3d cluster create claude-code --wait --timeout 120s --servers-memory ${var.cluster_memory_limit}
         Write-Host "k3d cluster created"
       }
     EOT

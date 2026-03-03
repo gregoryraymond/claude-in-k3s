@@ -27,3 +27,9 @@ variable "platform" {
   type        = string
   default     = "linux"
 }
+
+variable "cluster_memory_limit" {
+  description = "Memory limit for k3d cluster in megabytes (e.g. 12800m)"
+  type        = string
+  default     = "12800m"
+}
