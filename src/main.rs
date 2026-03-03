@@ -470,6 +470,21 @@ fn main() -> anyhow::Result<()> {
             }
 
             rt_handle.spawn(async move {
+                // On Windows, ensure k3d cluster exists with volume mounts
+                if plat == platform::Platform::Windows {
+                    append_to_tab(&ui, 0, "Ensuring k3d cluster exists...");
+                    if !ensure_k3d_cluster(&state, &ui).await {
+                        append_to_tab(&ui, 0, "k3d cluster creation failed. Aborting.");
+                        update_tab_status(&ui, 0, "Failed");
+                        slint::invoke_from_event_loop({
+                            let ui = ui.clone();
+                            move || { set_busy(&ui, false); }
+                        }).ok();
+                        return;
+                    }
+                    append_to_tab(&ui, 0, "k3d cluster ready.");
+                }
+
                 let mut project_tuples = Vec::new();
                 let mut any_failed = false;
 
@@ -572,34 +587,60 @@ fn main() -> anyhow::Result<()> {
                             };
                             if can_retry {
                                 append_to_tab(&ui, 0, &action.description());
-                                if matches!(action, recovery::RecoveryAction::FixNamespaceOwnership) {
-                                    let kubectl_bin = {
-                                        let s = state.lock().unwrap();
-                                        platform::kubectl_binary(&s.platform).to_string()
-                                    };
-                                    let fix_result = recovery::fix_namespace_ownership(
-                                        &kubectl_bin,
-                                        "claude-code",
-                                    ).await;
 
-                                    match fix_result {
-                                        Ok(fr) if fr.success => {
-                                            {
-                                                let mut s = state.lock().unwrap();
-                                                s.recovery_tracker.record_helm_attempt();
+                                let (kubectl_bin, helm_bin) = {
+                                    let s = state.lock().unwrap();
+                                    (
+                                        platform::kubectl_binary(&s.platform).to_string(),
+                                        platform::helm_binary(&s.platform).to_string(),
+                                    )
+                                };
+
+                                let fix_ok = match &action {
+                                    recovery::RecoveryAction::FixNamespaceOwnership => {
+                                        match recovery::fix_namespace_ownership(&kubectl_bin, "claude-code").await {
+                                            Ok(fr) if fr.success => true,
+                                            Ok(fr) => {
+                                                append_to_tab(&ui, 0, &format!("[Recovery] Fix failed: {}", fr.stderr));
+                                                false
                                             }
-                                            append_to_tab(&ui, 0, "[Recovery] Fixed. Retrying Helm install...");
-                                            result = helm_runner
-                                                .install_or_upgrade(&project_tuples, &extra_args)
-                                                .await;
-                                        }
-                                        Ok(fr) => {
-                                            append_to_tab(&ui, 0, &format!("[Recovery] Fix failed: {}", fr.stderr));
-                                        }
-                                        Err(e) => {
-                                            append_to_tab(&ui, 0, &format!("[Recovery] Fix error: {}", e));
+                                            Err(e) => {
+                                                append_to_tab(&ui, 0, &format!("[Recovery] Fix error: {}", e));
+                                                false
+                                            }
                                         }
                                     }
+                                    recovery::RecoveryAction::CleanHelmRelease => {
+                                        match recovery::clean_helm_release(&kubectl_bin, "claude-code").await {
+                                            Ok(fr) if fr.success => true,
+                                            Ok(_) => true, // "No resources found" is fine
+                                            Err(e) => {
+                                                append_to_tab(&ui, 0, &format!("[Recovery] Clean error: {}", e));
+                                                false
+                                            }
+                                        }
+                                    }
+                                    recovery::RecoveryAction::ForceReinstallHelm => {
+                                        match recovery::force_uninstall_helm(&helm_bin, "claude-code", "claude-code").await {
+                                            Ok(_) => true, // Uninstall succeeded or secrets cleaned
+                                            Err(e) => {
+                                                append_to_tab(&ui, 0, &format!("[Recovery] Uninstall error: {}", e));
+                                                false
+                                            }
+                                        }
+                                    }
+                                    _ => false,
+                                };
+
+                                if fix_ok {
+                                    {
+                                        let mut s = state.lock().unwrap();
+                                        s.recovery_tracker.record_helm_attempt();
+                                    }
+                                    append_to_tab(&ui, 0, "[Recovery] Fixed. Retrying Helm install...");
+                                    result = helm_runner
+                                        .install_or_upgrade(&project_tuples, &extra_args)
+                                        .await;
                                 }
                             }
                         }
@@ -1415,6 +1456,176 @@ fn pods_container_status(pods: &[PodStatus]) -> String {
     } else {
         format!("0/{} running", pods.len())
     }
+}
+
+/// On Windows, ensure the k3d cluster exists with the right volume mounts
+/// for the selected projects. If the cluster doesn't exist, create it.
+/// If it exists but is missing required mounts, recreate it.
+async fn ensure_k3d_cluster(
+    state: &Arc<Mutex<AppState>>,
+    ui: &slint::Weak<AppWindow>,
+) -> bool {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    // Check if cluster exists
+    let check = Command::new("k3d")
+        .args(["cluster", "list", "-o", "json"])
+        .stdout(StdStdio::piped())
+        .stderr(StdStdio::piped())
+        .output()
+        .await;
+
+    let cluster_exists = match check {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.contains("claude-code")
+        }
+        _ => false,
+    };
+
+    // Build the list of required container-side mount paths
+    let required_mounts: Vec<String> = {
+        let s = state.lock().unwrap();
+        let mut mounts = Vec::new();
+        if let Some(ref projects_dir) = s.config.projects_dir {
+            mounts.push(platform::to_k3d_container_path(projects_dir, &s.platform));
+        }
+        if let Some(home) = dirs::home_dir() {
+            let host_path = home.join(".claude").to_string_lossy().to_string();
+            mounts.push(platform::to_k3d_container_path(&host_path, &s.platform));
+        }
+        mounts
+    };
+
+    if cluster_exists {
+        // Verify required paths exist inside the k3d container
+        let mounts_ok = verify_k3d_mounts(&required_mounts).await;
+        if mounts_ok {
+            return true;
+        }
+        // Mounts missing — need to recreate the cluster
+        append_to_tab(ui, 0, "k3d cluster exists but is missing volume mounts. Recreating...");
+        let delete = Command::new("k3d")
+            .args(["cluster", "delete", "claude-code"])
+            .stdout(StdStdio::piped())
+            .stderr(StdStdio::piped())
+            .output()
+            .await;
+        match delete {
+            Ok(output) if output.status.success() => {
+                append_to_tab(ui, 0, "Old cluster deleted.");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let msg = format!("Failed to delete old cluster: {}", stderr.trim());
+                append_to_tab(ui, 0, &msg);
+                append_log(state, &msg);
+                return false;
+            }
+            Err(e) => {
+                let msg = format!("Failed to delete old cluster: {}", e);
+                append_to_tab(ui, 0, &msg);
+                append_log(state, &msg);
+                return false;
+            }
+        }
+    }
+
+    // Create cluster with volume mounts
+    append_to_tab(ui, 0, "Creating k3d cluster with volume mounts...");
+    append_log(state, "Creating k3d cluster with volume mounts...");
+
+    let (memory_limit, volume_flags) = {
+        let s = state.lock().unwrap();
+        let mem = format!("{}m", s.compute_cluster_memory_limit());
+
+        let mut flags = Vec::new();
+        // Mount projects directory
+        if let Some(ref projects_dir) = s.config.projects_dir {
+            let container_path = platform::to_k3d_container_path(projects_dir, &s.platform);
+            flags.push("--volume".to_string());
+            flags.push(platform::k3d_volume_flag(projects_dir, &container_path));
+        }
+        // Mount credentials directory
+        if let Some(home) = dirs::home_dir() {
+            let claude_dir = home.join(".claude");
+            let host_path = claude_dir.to_string_lossy().to_string();
+            let container_path = platform::to_k3d_container_path(&host_path, &s.platform);
+            flags.push("--volume".to_string());
+            flags.push(platform::k3d_volume_flag(&host_path, &container_path));
+        }
+        (mem, flags)
+    };
+
+    let mut args = vec![
+        "cluster".to_string(), "create".to_string(), "claude-code".to_string(),
+        "--wait".to_string(), "--timeout".to_string(), "120s".to_string(),
+        "--servers-memory".to_string(), memory_limit,
+    ];
+    args.extend(volume_flags);
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    let create = Command::new("k3d")
+        .args(&arg_refs)
+        .stdout(StdStdio::piped())
+        .stderr(StdStdio::piped())
+        .output()
+        .await;
+
+    match create {
+        Ok(output) if output.status.success() => {
+            append_to_tab(ui, 0, "k3d cluster created successfully.");
+            true
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let msg = format!("k3d cluster creation failed: {}", stderr.trim());
+            append_to_tab(ui, 0, &msg);
+            append_log(state, &msg);
+            false
+        }
+        Err(e) => {
+            let msg = format!("k3d cluster creation error: {}", e);
+            append_to_tab(ui, 0, &msg);
+            append_log(state, &msg);
+            false
+        }
+    }
+}
+
+/// Check whether the required mount paths exist inside the k3d server container.
+/// Uses `docker exec` to test each path inside `k3d-claude-code-server-0`.
+async fn verify_k3d_mounts(required_paths: &[String]) -> bool {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    if required_paths.is_empty() {
+        return true;
+    }
+
+    // Build a single test command: `test -d /path1 && test -d /path2 && ...`
+    let test_expr: Vec<String> = required_paths
+        .iter()
+        .map(|p| format!("test -d '{}'", p))
+        .collect();
+    let cmd = test_expr.join(" && ");
+
+    let result = Command::new("docker")
+        .args([
+            "exec",
+            "k3d-claude-code-server-0",
+            "sh",
+            "-c",
+            &cmd,
+        ])
+        .stdout(StdStdio::piped())
+        .stderr(StdStdio::piped())
+        .output()
+        .await;
+
+    matches!(result, Ok(output) if output.status.success())
 }
 
 fn compute_memory_info(percent: u8) -> String {

@@ -2,16 +2,6 @@ ARG BASE_IMAGE=node:22-bookworm-slim
 
 FROM ${BASE_IMAGE}
 
-# Install Node.js if not already present (needed for claude-code CLI)
-# The node base image already has it; others need it installed
-RUN if ! command -v node >/dev/null 2>&1; then \
-        apt-get update && apt-get install -y --no-install-recommends \
-            curl ca-certificates && \
-        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-        apt-get install -y --no-install-recommends nodejs && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
-
 # Install common tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -21,19 +11,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code globally
-RUN npm install -g @anthropic-ai/claude-code
-
 # Ensure a user with UID 1000 exists (some base images already have one)
 RUN if ! id -u 1000 >/dev/null 2>&1; then \
         useradd -m -s /bin/bash -u 1000 claude; \
     fi
 
+# Install Claude Code via native installer and copy to a global path
+RUN bash -c 'set -e && \
+    curl -fsSL https://claude.ai/install.sh | bash && \
+    source ~/.bashrc 2>/dev/null || true && \
+    CLAUDE_BIN=$(which claude 2>/dev/null || \
+        find / -maxdepth 8 -name "claude" \( -type f -o -type l \) -executable \
+            -not -path "*/downloads/*" 2>/dev/null | head -1) && \
+    echo "Found claude at: $CLAUDE_BIN" && \
+    if [ -n "$CLAUDE_BIN" ] && [ "$CLAUDE_BIN" != "/usr/local/bin/claude" ]; then \
+        cp -L "$CLAUDE_BIN" /usr/local/bin/claude && chmod +x /usr/local/bin/claude; \
+    fi && \
+    /usr/local/bin/claude --version'
+
 # Pre-configure Claude to skip onboarding (use UID 1000's home directory)
-RUN USER_HOME=$(eval echo "~$(id -nu 1000)") && \
+RUN bash -c 'USER_HOME=$(eval echo "~$(id -nu 1000)") && \
     mkdir -p "$USER_HOME/.claude" && \
-    echo '{"hasCompletedOnboarding": true}' > "$USER_HOME/.claude.json" && \
-    chown -R 1000:1000 "$USER_HOME/.claude" "$USER_HOME/.claude.json"
+    echo '"'"'{"hasCompletedOnboarding": true}'"'"' > "$USER_HOME/.claude.json" && \
+    chown -R 1000:1000 "$USER_HOME/.claude" "$USER_HOME/.claude.json"'
 
 # Create workspace mount point
 RUN mkdir -p /workspace && chown 1000:1000 /workspace

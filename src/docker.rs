@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult, CmdResult};
+use crate::platform::Platform;
 use crate::projects::{BaseImage, Project};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,13 +9,15 @@ use tokio::process::Command;
 pub struct DockerBuilder {
     docker_binary: String,
     template_dir: String,
+    platform: Platform,
 }
 
 impl DockerBuilder {
-    pub fn new(docker_binary: &str, template_dir: &str) -> Self {
+    pub fn new(docker_binary: &str, template_dir: &str, platform: &Platform) -> Self {
         Self {
             docker_binary: docker_binary.into(),
             template_dir: template_dir.into(),
+            platform: platform.clone(),
         }
     }
 
@@ -60,7 +63,7 @@ impl DockerBuilder {
         })
     }
 
-    /// Build a Docker image from a project's custom Dockerfile
+    /// Build a Docker image from a project's custom Dockerfile, then overlay Claude Code
     #[allow(dead_code)]
     pub async fn build_custom(
         &self,
@@ -78,14 +81,41 @@ impl DockerBuilder {
             )));
         };
 
+        // Stage 1: Build custom Dockerfile to intermediate tag
+        let base_tag = format!("{}-base", tag);
+        let output = Command::new(&self.docker_binary)
+            .args([
+                "build",
+                "-t",
+                &base_tag,
+                "-f",
+                &dockerfile.to_string_lossy(),
+                &project.path.to_string_lossy(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Ok(CmdResult {
+                success: false,
+                stdout: String::from_utf8_lossy(&output.stdout).into(),
+                stderr: String::from_utf8_lossy(&output.stderr).into(),
+            });
+        }
+
+        // Stage 2: Overlay Claude Code
         let output = Command::new(&self.docker_binary)
             .args([
                 "build",
                 "-t",
                 tag,
+                "--build-arg",
+                &format!("BASE_IMAGE={}", base_tag),
                 "-f",
-                &dockerfile.to_string_lossy(),
-                &project.path.to_string_lossy(),
+                &format!("{}/Dockerfile.claude-overlay", self.template_dir),
+                &self.template_dir,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -99,9 +129,27 @@ impl DockerBuilder {
         })
     }
 
-    /// Import a Docker image into k3s containerd
+    /// Import a Docker image into the k8s cluster.
+    /// On Windows: uses `k3d image import` (images go into k3d's containerd via Docker).
+    /// On Linux/macOS/WSL2: uses `docker save | k3s ctr images import`.
     pub async fn import_to_k3s(&self, tag: &str) -> AppResult<CmdResult> {
-        // docker save <tag> | sudo k3s ctr images import -
+        if self.platform == Platform::Windows {
+            // k3d can import directly from the local Docker daemon
+            let output = Command::new("k3d")
+                .args(["image", "import", tag, "--cluster", "claude-code"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await?;
+
+            return Ok(CmdResult {
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).into(),
+                stderr: String::from_utf8_lossy(&output.stderr).into(),
+            });
+        }
+
+        // Linux/macOS/WSL2: docker save <tag> | sudo k3s ctr images import -
         let mut save = Command::new(&self.docker_binary)
             .args(["save", tag])
             .stdout(Stdio::piped())
@@ -113,7 +161,6 @@ impl DockerBuilder {
             .take()
             .ok_or_else(|| AppError::Docker("Failed to capture docker save stdout".into()))?;
 
-        // Convert tokio ChildStdout to std Stdio via the owned handle/fd
         #[cfg(windows)]
         let std_stdio: Stdio = save_stdout.into_owned_handle()?.into();
         #[cfg(unix)]
@@ -127,7 +174,6 @@ impl DockerBuilder {
             .output()
             .await?;
 
-        // Wait for the save process to finish
         let _ = save.wait().await;
 
         Ok(CmdResult {
@@ -167,7 +213,8 @@ impl DockerBuilder {
         Self::stream_child_output(&mut child, cancel, on_line).await
     }
 
-    /// Build a Docker image from a project's custom Dockerfile, with streaming output
+    /// Build a Docker image from a project's custom Dockerfile, with streaming output.
+    /// After building the custom image, overlays Claude Code installation on top.
     pub async fn build_custom_streaming<F>(
         &self,
         project: &Project,
@@ -189,15 +236,51 @@ impl DockerBuilder {
             )));
         };
 
+        // Stage 1: Build the user's custom Dockerfile to an intermediate tag
+        let base_tag = format!("{}-base", tag);
+        on_line("Building custom Dockerfile...");
+
+        let mut child = Command::new(&self.docker_binary)
+            .args([
+                "build",
+                "--progress=plain",
+                "-t",
+                &base_tag,
+                "-f",
+                &dockerfile.to_string_lossy(),
+                &project.path.to_string_lossy(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let base_result = Self::stream_child_output(&mut child, cancel, on_line).await?;
+        if !base_result.success {
+            return Ok(base_result);
+        }
+
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(CmdResult {
+                success: false,
+                stdout: String::new(),
+                stderr: "Cancelled".into(),
+            });
+        }
+
+        // Stage 2: Overlay Claude Code on top using the claude-overlay Dockerfile
+        on_line("Installing Claude Code into custom image...");
+
         let mut child = Command::new(&self.docker_binary)
             .args([
                 "build",
                 "--progress=plain",
                 "-t",
                 tag,
+                "--build-arg",
+                &format!("BASE_IMAGE={}", base_tag),
                 "-f",
-                &dockerfile.to_string_lossy(),
-                &project.path.to_string_lossy(),
+                &format!("{}/Dockerfile.claude-overlay", self.template_dir),
+                &self.template_dir,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -422,9 +505,10 @@ mod tests {
 
     #[test]
     fn docker_builder_construction() {
-        let builder = DockerBuilder::new("/usr/bin/docker", "/opt/templates");
+        let builder = DockerBuilder::new("/usr/bin/docker", "/opt/templates", &Platform::Linux);
         assert_eq!(builder.docker_binary, "/usr/bin/docker");
         assert_eq!(builder.template_dir, "/opt/templates");
+        assert_eq!(builder.platform, Platform::Linux);
     }
 
     // ── build_custom: no Dockerfile → error ──────────────────────────
@@ -434,7 +518,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let project = make_project_with_path("test-proj", tmp.path().to_path_buf());
 
-        let builder = DockerBuilder::new("docker", "/tmp/templates");
+        let builder = DockerBuilder::new("docker", "/tmp/templates", &Platform::Linux);
         let result = builder.build_custom(&project, "test:latest").await;
 
         assert!(result.is_err());
@@ -490,6 +574,7 @@ mod tests {
         let builder = DockerBuilder::new(
             mock_path.to_str().unwrap(),
             template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
         );
 
         let result = builder
@@ -522,6 +607,7 @@ mod tests {
         let builder = DockerBuilder::new(
             mock_path.to_str().unwrap(),
             template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
         );
 
         let result = builder
@@ -560,6 +646,7 @@ mod tests {
         let builder = DockerBuilder::new(
             mock_path.to_str().unwrap(),
             template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
         );
 
         // Use a non-Custom base_image so build_and_import takes the
