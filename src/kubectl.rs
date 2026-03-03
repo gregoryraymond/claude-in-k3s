@@ -13,6 +13,12 @@ pub struct PodStatus {
     pub age: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct NodeStatus {
+    pub name: String,
+    pub ready: bool,
+}
+
 pub struct KubectlRunner {
     binary: String,
     namespace: String,
@@ -165,6 +171,37 @@ impl KubectlRunner {
     pub async fn cluster_health(&self) -> AppResult<bool> {
         let result = self.run(&["cluster-info"]).await?;
         Ok(result.success)
+    }
+
+    pub async fn get_nodes(&self) -> AppResult<Vec<NodeStatus>> {
+        let result = self.run(&["get", "nodes", "-o", "json"]).await?;
+
+        if !result.success {
+            return Ok(vec![]);
+        }
+
+        let node_list: serde_json::Value = serde_json::from_str(&result.stdout)?;
+        let mut nodes = Vec::new();
+
+        if let Some(items) = node_list["items"].as_array() {
+            for item in items {
+                let name = item["metadata"]["name"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let ready = item["status"]["conditions"]
+                    .as_array()
+                    .and_then(|conds| {
+                        conds.iter().find(|c| c["type"].as_str() == Some("Ready"))
+                    })
+                    .and_then(|c| c["status"].as_str())
+                    .map(|s| s == "True")
+                    .unwrap_or(false);
+                nodes.push(NodeStatus { name, ready });
+            }
+        }
+
+        Ok(nodes)
     }
 
     pub async fn delete_pod(&self, pod_name: &str) -> AppResult<CmdResult> {

@@ -3,6 +3,7 @@ mod config;
 mod deps;
 mod docker;
 mod error;
+mod health;
 mod helm;
 mod kubectl;
 mod platform;
