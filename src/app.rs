@@ -104,7 +104,7 @@ impl AppState {
     }
 
     /// Compute the cluster memory limit in megabytes based on system RAM and config percentage.
-    fn compute_cluster_memory_limit(&self) -> u64 {
+    pub fn compute_cluster_memory_limit(&self) -> u64 {
         let mut sys = System::new();
         sys.refresh_memory();
         let total_mb = sys.total_memory() / 1024 / 1024;

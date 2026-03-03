@@ -152,7 +152,76 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 // Step 2: terraform apply
-                let apply_result = runner.apply().await;
+                let mut apply_result = runner.apply().await;
+
+                // Attempt cluster recovery on failure (Windows/k3d only)
+                if let Ok(ref r) = apply_result {
+                    if !r.success {
+                        let stderr = &r.stderr;
+                        let (is_windows, can_retry) = {
+                            let s = state.lock().unwrap();
+                            (
+                                s.platform == platform::Platform::Windows,
+                                s.recovery_tracker.can_retry_cluster(),
+                            )
+                        };
+                        if is_windows {
+                            if let Some(action) = recovery::diagnose_cluster_failure(stderr) {
+                                if can_retry {
+                                    let memory_limit = {
+                                        let s = state.lock().unwrap();
+                                        let mem = s.compute_cluster_memory_limit();
+                                        format!("{}m", mem)
+                                    };
+
+                                    let msg = action.description();
+                                    let state2 = state.clone();
+                                    let ui2 = ui.clone();
+                                    slint::invoke_from_event_loop(move || {
+                                        append_log(&state2, &msg);
+                                        sync_log(&ui2, &state2);
+                                    }).ok();
+
+                                    let fix_result = recovery::recreate_k3d_cluster(&memory_limit).await;
+                                    match fix_result {
+                                        Ok(fr) if fr.success => {
+                                            {
+                                                let mut s = state.lock().unwrap();
+                                                s.recovery_tracker.record_cluster_attempt();
+                                            }
+                                            let msg2 = "[Recovery] Cluster recreated. Retrying terraform apply...".to_string();
+                                            let state3 = state.clone();
+                                            let ui3 = ui.clone();
+                                            slint::invoke_from_event_loop(move || {
+                                                append_log(&state3, &msg2);
+                                                sync_log(&ui3, &state3);
+                                            }).ok();
+                                            apply_result = runner.apply().await;
+                                        }
+                                        Ok(fr) => {
+                                            let msg2 = format!("[Recovery] Cluster recreate failed: {}", fr.stderr);
+                                            let state3 = state.clone();
+                                            let ui3 = ui.clone();
+                                            slint::invoke_from_event_loop(move || {
+                                                append_log(&state3, &msg2);
+                                                sync_log(&ui3, &state3);
+                                            }).ok();
+                                        }
+                                        Err(e) => {
+                                            let msg2 = format!("[Recovery] Cluster recreate error: {}", e);
+                                            let state3 = state.clone();
+                                            let ui3 = ui.clone();
+                                            slint::invoke_from_event_loop(move || {
+                                                append_log(&state3, &msg2);
+                                                sync_log(&ui3, &state3);
+                                            }).ok();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 slint::invoke_from_event_loop(move || {
                     match apply_result {
@@ -160,10 +229,11 @@ fn main() -> anyhow::Result<()> {
                             append_log(&state, &format_cmd_result("terraform apply", &r));
                             if r.success {
                                 state.lock().unwrap().cluster_healthy = true;
+                                state.lock().unwrap().recovery_tracker.reset();
                                 if let Some(ui) = ui.upgrade() {
                                     ui.set_cluster_status("Healthy".into());
                                     ui.set_tf_initialized(true);
-                                    ui.set_active_page(1); // Navigate to Projects
+                                    ui.set_active_page(1);
                                 }
                             }
                         }
@@ -1143,6 +1213,54 @@ fn main() -> anyhow::Result<()> {
                             append_log(&state3, &msg);
                             sync_log(&ui3, &state3);
                         }).ok();
+                    }
+                }
+
+                // Check for image pull issues
+                let image_actions = recovery::diagnose_image_issues(&pods);
+                for action in image_actions {
+                    if let recovery::RecoveryAction::ReimportImage { ref image, ref pod } = action {
+                        let docker_builder2 = {
+                            let s = state.lock().unwrap();
+                            s.docker_builder()
+                        };
+                        let kubectl2 = {
+                            let s = state.lock().unwrap();
+                            s.kubectl_runner()
+                        };
+
+                        // Re-import image to k3d
+                        match docker_builder2.import_to_k3s(image).await {
+                            Ok(r) if r.success => {
+                                // Delete the pod so it restarts with the reimported image
+                                let _ = kubectl2.delete_pod(pod).await;
+                                let msg = format!("[Recovery] Re-imported image {} and restarted pod {}.", image, pod);
+                                let state3 = state.clone();
+                                let ui3 = ui_handle.clone();
+                                slint::invoke_from_event_loop(move || {
+                                    append_log(&state3, &msg);
+                                    sync_log(&ui3, &state3);
+                                }).ok();
+                            }
+                            Ok(r) => {
+                                let msg = format!("[Recovery] Image reimport failed for {}: {}", image, r.stderr.trim());
+                                let state3 = state.clone();
+                                let ui3 = ui_handle.clone();
+                                slint::invoke_from_event_loop(move || {
+                                    append_log(&state3, &msg);
+                                    sync_log(&ui3, &state3);
+                                }).ok();
+                            }
+                            Err(e) => {
+                                let msg = format!("[Recovery] Image reimport error for {}: {}", image, e);
+                                let state3 = state.clone();
+                                let ui3 = ui_handle.clone();
+                                slint::invoke_from_event_loop(move || {
+                                    append_log(&state3, &msg);
+                                    sync_log(&ui3, &state3);
+                                }).ok();
+                            }
+                        }
                     }
                 }
 

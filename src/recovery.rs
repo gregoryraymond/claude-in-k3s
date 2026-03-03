@@ -5,7 +5,6 @@ const MAX_RECOVERY_ATTEMPTS: u32 = 2;
 
 /// Identifies which recovery action to take based on error output.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub enum RecoveryAction {
     /// Fix Helm namespace ownership labels and retry.
     FixNamespaceOwnership,
@@ -48,7 +47,6 @@ pub fn diagnose_helm_failure(stderr: &str) -> Option<RecoveryAction> {
 }
 
 /// Analyze stderr for k3d/cluster failures.
-#[allow(dead_code)]
 pub fn diagnose_cluster_failure(stderr: &str) -> Option<RecoveryAction> {
     let stderr_lower = stderr.to_lowercase();
     if stderr_lower.contains("k3d")
@@ -70,6 +68,25 @@ pub fn diagnose_pod_issues(
     for pod in pods {
         if pod.restart_count > 5 && (pod.phase == "Running" || pod.phase == "CrashLoopBackOff") {
             actions.push(RecoveryAction::DeletePod(pod.name.clone()));
+        }
+    }
+    actions
+}
+
+/// Analyze pod status for image pull issues.
+/// Checks waiting container state for ImagePullBackOff or ErrImageNeverPull.
+pub fn diagnose_image_issues(
+    pods: &[crate::kubectl::PodStatus],
+) -> Vec<RecoveryAction> {
+    let mut actions = Vec::new();
+    for pod in pods {
+        if pod.phase == "Pending" || pod.phase == "ImagePullBackOff" || pod.phase == "ErrImageNeverPull" {
+            // Extract image tag from pod name (convention: claude-code-{project}-xxx)
+            let image = format!("claude-code-{}:latest", pod.project);
+            actions.push(RecoveryAction::ReimportImage {
+                image,
+                pod: pod.name.clone(),
+            });
         }
     }
     actions
@@ -134,6 +151,39 @@ pub async fn fix_namespace_ownership(
     })
 }
 
+/// Recreate the k3d cluster. Deletes the existing cluster and creates a new one
+/// with the specified memory limit.
+pub async fn recreate_k3d_cluster(memory_limit: &str) -> AppResult<CmdResult> {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    // Force delete existing cluster
+    let _ = Command::new("k3d")
+        .args(["cluster", "delete", "claude-code"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+
+    // Create new cluster with memory limit
+    let output = Command::new("k3d")
+        .args([
+            "cluster", "create", "claude-code",
+            "--wait", "--timeout", "120s",
+            "--servers-memory", memory_limit,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+
+    Ok(CmdResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into(),
+        stderr: String::from_utf8_lossy(&output.stderr).into(),
+    })
+}
+
 /// Tracks recovery attempt counts per operation type.
 pub struct RecoveryTracker {
     helm_attempts: u32,
@@ -156,12 +206,10 @@ impl RecoveryTracker {
         self.helm_attempts += 1;
     }
 
-    #[allow(dead_code)]
     pub fn can_retry_cluster(&self) -> bool {
         self.cluster_attempts < MAX_RECOVERY_ATTEMPTS
     }
 
-    #[allow(dead_code)]
     pub fn record_cluster_attempt(&mut self) {
         self.cluster_attempts += 1;
     }
@@ -268,6 +316,51 @@ mod tests {
         assert!(!tracker.can_retry_helm());
         tracker.reset();
         assert!(tracker.can_retry_helm());
+    }
+
+    #[test]
+    fn diagnose_image_pull_backoff() {
+        let pods = vec![
+            crate::kubectl::PodStatus {
+                name: "claude-code-myproj-abc123".into(),
+                project: "myproj".into(),
+                phase: "ImagePullBackOff".into(),
+                ready: false,
+                restart_count: 0,
+                age: "5m".into(),
+            },
+            crate::kubectl::PodStatus {
+                name: "claude-code-other-def456".into(),
+                project: "other".into(),
+                phase: "Running".into(),
+                ready: true,
+                restart_count: 0,
+                age: "1h".into(),
+            },
+        ];
+        let actions = diagnose_image_issues(&pods);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            RecoveryAction::ReimportImage {
+                image: "claude-code-myproj:latest".into(),
+                pod: "claude-code-myproj-abc123".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn diagnose_image_no_issues() {
+        let pods = vec![crate::kubectl::PodStatus {
+            name: "pod-1".into(),
+            project: "proj".into(),
+            phase: "Running".into(),
+            ready: true,
+            restart_count: 0,
+            age: "1h".into(),
+        }];
+        let actions = diagnose_image_issues(&pods);
+        assert!(actions.is_empty());
     }
 
     #[test]
