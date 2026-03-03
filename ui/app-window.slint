@@ -25,6 +25,9 @@ export component AppWindow inherits Window {
     in property <string> cluster-status: "Unknown";
     in property <string> docker-status: "Unknown";
     in property <string> containers-status: "Unknown";
+    in property <string> node-status: "Unknown";
+    in property <string> helm-release-status: "Unknown";
+    in property <string> memory-usage-text: "";
     in property <string> cluster-log: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
@@ -43,6 +46,8 @@ export component AppWindow inherits Window {
     in-out property <string> git-user-email: "claude-bot@localhost";
     in-out property <string> cpu-limit: "2";
     in-out property <string> memory-limit: "4Gi";
+    in-out property <string> cluster-memory-percent: "80";
+    in property <string> cluster-memory-info: "";
     in-out property <string> terraform-dir: "terraform";
     in-out property <string> helm-chart-dir: "helm/claude-code";
 
@@ -211,6 +216,9 @@ export component AppWindow inherits Window {
                 cluster-status: root.cluster-status;
                 docker-status: root.docker-status;
                 containers-status: root.containers-status;
+                node-status: root.node-status;
+                helm-release-status: root.helm-release-status;
+                memory-usage-text: root.memory-usage-text;
                 k3s-label: root.k3s-label;
                 log-output: root.cluster-log;
                 is-busy: root.is-busy;
@@ -293,6 +301,8 @@ export component AppWindow inherits Window {
                                 spacing: 12px;
                                 FormField { label: "CPU Limit"; text <=> root.cpu-limit; placeholder: "2"; }
                                 FormField { label: "Memory"; text <=> root.memory-limit; placeholder: "4Gi"; }
+                                FormField { label: "Cluster Memory %"; text <=> root.cluster-memory-percent; placeholder: "80"; }
+                                Text { text: root.cluster-memory-info; font-size: 11px; color: Theme.text-muted; }
                             }
                         }
 

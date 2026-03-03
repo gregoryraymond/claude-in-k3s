@@ -8,6 +8,9 @@ export component ClusterPanel inherits Rectangle {
     in property <string> cluster-status: "Unknown";
     in property <string> docker-status: "Unknown";
     in property <string> containers-status: "Unknown";
+    in property <string> node-status: "Unknown";
+    in property <string> helm-release-status: "Unknown";
+    in property <string> memory-usage-text: "";
     in property <string> k3s-label: "k3s";
     in property <string> log-output: "";
     in property <bool> is-busy: false;
@@ -82,7 +85,25 @@ export component ClusterPanel inherits Rectangle {
                     Text { text: "Containers"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
                     StatusBadge { status: containers-status; width: 100px; }
                 }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Node"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
+                    StatusBadge { status: node-status; width: 100px; }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Helm Release"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
+                    StatusBadge { status: helm-release-status; width: 100px; }
+                }
             }
+        }
+
+        if memory-usage-text != "" : Text {
+            text: memory-usage-text;
+            font-size: 12px;
+            color: Theme.text-muted;
         }
 
         if show-advanced : Card {
