@@ -12,7 +12,12 @@ pub struct AppConfig {
     pub git_user_email: String,
     pub cpu_limit: String,
     pub memory_limit: String,
+    #[serde(default = "default_cluster_memory_percent")]
     pub cluster_memory_percent: u8,
+}
+
+fn default_cluster_memory_percent() -> u8 {
+    80
 }
 
 impl Default for AppConfig {
@@ -154,7 +159,7 @@ mod tests {
 
     #[test]
     fn deserialize_missing_optional_fields() {
-        // A TOML document that omits the two Option<String> fields entirely.
+        // A TOML document that omits Option<String> fields and cluster_memory_percent entirely.
         let toml_str = r#"
             terraform_dir = "terraform"
             helm_chart_dir = "helm/claude-code"
@@ -163,11 +168,11 @@ mod tests {
             git_user_email = "claude-bot@localhost"
             cpu_limit = "2"
             memory_limit = "4Gi"
-            cluster_memory_percent = 80
         "#;
 
         let cfg: AppConfig = toml::from_str(toml_str).expect("deserialize");
         assert!(cfg.projects_dir.is_none());
+        assert_eq!(cfg.cluster_memory_percent, 80);
     }
 
     #[test]
