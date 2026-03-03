@@ -6,6 +6,7 @@ use crate::helm::HelmRunner;
 use crate::kubectl::{KubectlRunner, PodStatus};
 use crate::platform::{self, Platform};
 use crate::projects::{self, Project};
+use crate::recovery;
 use crate::terraform::TerraformRunner;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub deps_status: DepsStatus,
     pub log_buffer: String,
     pub cancel_flag: Arc<AtomicBool>,
+    pub recovery_tracker: recovery::RecoveryTracker,
     project_root: PathBuf,
 }
 
@@ -50,6 +52,7 @@ impl AppState {
             deps_status,
             log_buffer: String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            recovery_tracker: recovery::RecoveryTracker::new(),
             project_root,
         })
     }
@@ -186,6 +189,7 @@ mod tests {
             },
             log_buffer: String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            recovery_tracker: crate::recovery::RecoveryTracker::new(),
             project_root: PathBuf::from("/tmp/test-root"),
         }
     }

@@ -478,9 +478,61 @@ fn main() -> anyhow::Result<()> {
                     vec![]
                 };
 
-                let result = helm_runner
+                let mut result = helm_runner
                     .install_or_upgrade(&project_tuples, &extra_args)
                     .await;
+
+                // Attempt recovery on failure
+                if let Ok(ref r) = result {
+                    if !r.success {
+                        if let Some(action) = recovery::diagnose_helm_failure(&r.stderr) {
+                            let can_retry = {
+                                let s = state.lock().unwrap();
+                                s.recovery_tracker.can_retry_helm()
+                            };
+                            if can_retry {
+                                append_to_tab(&ui, 0, &action.description());
+                                if matches!(action, recovery::RecoveryAction::FixNamespaceOwnership) {
+                                    let kubectl_bin = {
+                                        let s = state.lock().unwrap();
+                                        platform::kubectl_binary(&s.platform).to_string()
+                                    };
+                                    let fix_result = recovery::fix_namespace_ownership(
+                                        &kubectl_bin,
+                                        "claude-code",
+                                    ).await;
+
+                                    match fix_result {
+                                        Ok(fr) if fr.success => {
+                                            {
+                                                let mut s = state.lock().unwrap();
+                                                s.recovery_tracker.record_helm_attempt();
+                                            }
+                                            append_to_tab(&ui, 0, "[Recovery] Fixed. Retrying Helm install...");
+                                            result = helm_runner
+                                                .install_or_upgrade(&project_tuples, &extra_args)
+                                                .await;
+                                        }
+                                        Ok(fr) => {
+                                            append_to_tab(&ui, 0, &format!("[Recovery] Fix failed: {}", fr.stderr));
+                                        }
+                                        Err(e) => {
+                                            append_to_tab(&ui, 0, &format!("[Recovery] Fix error: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Reset tracker on success
+                if let Ok(ref r) = result {
+                    if r.success {
+                        let mut s = state.lock().unwrap();
+                        s.recovery_tracker.reset();
+                    }
+                }
 
                 slint::invoke_from_event_loop({
                     let state = state.clone();
