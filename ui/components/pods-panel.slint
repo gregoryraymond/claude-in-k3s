@@ -3,6 +3,7 @@ import { Card } from "card.slint";
 import { IconButton } from "icon-button.slint";
 import { StatusBadge } from "status-badge.slint";
 import { DataRow } from "data-row.slint";
+import { LogViewer } from "log-viewer.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 export struct PodEntry {
@@ -17,6 +18,7 @@ export struct PodEntry {
 export component PodsPanel inherits Rectangle {
     in property <[PodEntry]> pods: [];
     in property <bool> is-busy: false;
+    in property <string> pod-log: "";
 
     callback refresh-pods();
     callback delete-pod(int);
@@ -170,6 +172,12 @@ export component PodsPanel inherits Rectangle {
                 enabled: claude-prompt != "";
                 clicked => { root.send-prompt(claude-prompt); }
             }
+        }
+
+        if pod-log != "" : LogViewer {
+            text: pod-log;
+            min-height: 180px;
+            vertical-stretch: 1;
         }
 
         Text {

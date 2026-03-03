@@ -489,8 +489,13 @@ fn main() -> anyhow::Result<()> {
                     append_to_tab(&ui, 0, &format!("Building '{}'...", project.name));
 
                     let ui_for_line = ui.clone();
+                    let project_name = project.name.clone();
                     let on_line = move |line: &str| {
                         append_to_tab(&ui_for_line, tab_idx, line);
+                        // Show import progress on the Summary tab too
+                        if line.contains("Importing image") {
+                            append_to_tab(&ui_for_line, 0, &format!("{}: {}", project_name, line));
+                        }
                     };
 
                     match docker_builder.build_and_import_streaming(project, &cancel_flag, &on_line).await {
@@ -604,6 +609,8 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
 
+                let deploy_success = matches!(&result, Ok(r) if r.success);
+
                 slint::invoke_from_event_loop({
                     let state = state.clone();
                     let ui = ui.clone();
@@ -624,8 +631,35 @@ fn main() -> anyhow::Result<()> {
                         }
                         set_busy(&ui, false);
                         sync_log(&ui, &state);
+
+                        // Navigate to Pods page after successful deploy
+                        if deploy_success {
+                            if let Some(u) = ui.upgrade() {
+                                u.set_active_page(2);
+                            }
+                        }
                     }
                 }).ok();
+
+                // Refresh pods after successful deploy (wait a moment for k8s to start them)
+                if deploy_success {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let kubectl = {
+                        let s = state.lock().unwrap();
+                        s.kubectl_runner()
+                    };
+                    if let Ok(pods) = kubectl.get_pods().await {
+                        let state2 = state.clone();
+                        let ui2 = ui.clone();
+                        slint::invoke_from_event_loop(move || {
+                            {
+                                let mut s = state2.lock().unwrap();
+                                s.pods = pods;
+                            }
+                            sync_pods(&ui2, &state2);
+                        }).ok();
+                    }
+                }
             });
         });
     }
@@ -811,16 +845,15 @@ fn main() -> anyhow::Result<()> {
                 let result = kubectl.get_logs(&pod_name, 100).await;
 
                 slint::invoke_from_event_loop(move || {
-                    match result {
+                    let log_text = match result {
                         Ok(r) => {
-                            append_log(
-                                &state,
-                                &format!("--- Logs for {} ---\n{}", pod_name, r.stdout),
-                            );
+                            format!("--- Logs for {} ---\n{}", pod_name, r.stdout)
                         }
-                        Err(e) => append_log(&state, &format!("Logs error: {}", e)),
+                        Err(e) => format!("Logs error: {}", e),
+                    };
+                    if let Some(u) = ui.upgrade() {
+                        u.set_pod_log(log_text.into());
                     }
-                    sync_log(&ui, &state);
                 })
                 .ok();
             });

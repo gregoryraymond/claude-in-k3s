@@ -36,6 +36,7 @@ export component AppWindow inherits Window {
     in-out property <[ProjectEntry]> projects: [];
 
     in property <[PodEntry]> pods: [];
+    in property <string> pod-log: "";
 
     in-out property <string> claude-prompt: "";
     in property <string> claude-target-pod: "";
@@ -250,6 +251,7 @@ export component AppWindow inherits Window {
             if all-deps-met && active-page == 2 : PodsPanel {
                 pods: root.pods;
                 is-busy: root.is-busy;
+                pod-log: root.pod-log;
                 refresh-pods => { root.refresh-pods(); }
                 delete-pod(idx) => { root.delete-pod(idx); }
                 view-logs(idx) => { root.view-logs(idx); }
