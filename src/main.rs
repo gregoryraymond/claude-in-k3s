@@ -47,6 +47,8 @@ fn main() -> anyhow::Result<()> {
         ui.set_git_user_email(s.config.git_user_email.clone().into());
         ui.set_cpu_limit(s.config.cpu_limit.clone().into());
         ui.set_memory_limit(s.config.memory_limit.clone().into());
+        ui.set_cluster_memory_percent(s.config.cluster_memory_percent.to_string().into());
+        ui.set_cluster_memory_info(compute_memory_info(s.config.cluster_memory_percent).into());
         ui.set_terraform_dir(s.config.terraform_dir.clone().into());
         ui.set_helm_chart_dir(s.config.helm_chart_dir.clone().into());
     }
@@ -794,6 +796,11 @@ fn main() -> anyhow::Result<()> {
                 s.config.git_user_email = ui.get_git_user_email().to_string();
                 s.config.cpu_limit = ui.get_cpu_limit().to_string();
                 s.config.memory_limit = ui.get_memory_limit().to_string();
+                s.config.cluster_memory_percent = ui.get_cluster_memory_percent()
+                    .to_string()
+                    .parse::<u8>()
+                    .unwrap_or(80)
+                    .clamp(50, 95);
                 s.config.terraform_dir = ui.get_terraform_dir().to_string();
                 s.config.helm_chart_dir = ui.get_helm_chart_dir().to_string();
                 match s.config.save() {
@@ -1120,6 +1127,14 @@ fn pods_container_status(pods: &[PodStatus]) -> String {
     } else {
         format!("0/{} running", pods.len())
     }
+}
+
+fn compute_memory_info(percent: u8) -> String {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total_gb = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
+    let limit_gb = total_gb * percent as f64 / 100.0;
+    format!("{:.1} GB of {:.1} GB", limit_gb, total_gb)
 }
 
 fn format_cmd_result(cmd: &str, r: &error::CmdResult) -> String {
