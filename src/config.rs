@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub git_user_email: String,
     pub cpu_limit: String,
     pub memory_limit: String,
+    pub cluster_memory_percent: u8,
 }
 
 impl Default for AppConfig {
@@ -25,6 +26,7 @@ impl Default for AppConfig {
             git_user_email: "claude-bot@localhost".into(),
             cpu_limit: "2".into(),
             memory_limit: "4Gi".into(),
+            cluster_memory_percent: 80,
         }
     }
 }
@@ -119,6 +121,7 @@ mod tests {
             git_user_email: "test@example.com".into(),
             cpu_limit: "4".into(),
             memory_limit: "8Gi".into(),
+            cluster_memory_percent: 90,
         };
 
         let toml_str = toml::to_string_pretty(&cfg).expect("serialize");
@@ -132,6 +135,7 @@ mod tests {
         assert_eq!(loaded.git_user_email, "test@example.com");
         assert_eq!(loaded.cpu_limit, "4");
         assert_eq!(loaded.memory_limit, "8Gi");
+        assert_eq!(loaded.cluster_memory_percent, 90);
     }
 
     #[test]
@@ -159,6 +163,7 @@ mod tests {
             git_user_email = "claude-bot@localhost"
             cpu_limit = "2"
             memory_limit = "4Gi"
+            cluster_memory_percent = 80
         "#;
 
         let cfg: AppConfig = toml::from_str(toml_str).expect("deserialize");
@@ -179,6 +184,7 @@ mod tests {
             git_user_email: "roundtrip@test.com".into(),
             cpu_limit: "8".into(),
             memory_limit: "16Gi".into(),
+            cluster_memory_percent: 65,
         };
 
         cfg.save_to(&path).expect("save");
@@ -192,6 +198,7 @@ mod tests {
         assert_eq!(loaded.git_user_email, "roundtrip@test.com");
         assert_eq!(loaded.cpu_limit, "8");
         assert_eq!(loaded.memory_limit, "16Gi");
+        assert_eq!(loaded.cluster_memory_percent, 65);
     }
 
     #[test]
@@ -211,5 +218,25 @@ mod tests {
         assert_eq!(cfg.git_user_email, def.git_user_email);
         assert_eq!(cfg.cpu_limit, def.cpu_limit);
         assert_eq!(cfg.memory_limit, def.memory_limit);
+    }
+
+    #[test]
+    fn default_cluster_memory_percent() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.cluster_memory_percent, 80);
+    }
+
+    #[test]
+    fn cluster_memory_percent_roundtrip() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("config.toml");
+
+        let cfg = AppConfig {
+            cluster_memory_percent: 70,
+            ..AppConfig::default()
+        };
+        cfg.save_to(&path).expect("save");
+        let loaded = AppConfig::load_from(&path).expect("load");
+        assert_eq!(loaded.cluster_memory_percent, 70);
     }
 }
