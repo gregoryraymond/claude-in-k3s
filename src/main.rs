@@ -1054,6 +1054,50 @@ fn main() -> anyhow::Result<()> {
     }
     sync_projects(&ui.as_weak(), &state);
 
+    // --- Background health poll ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+
+        rt.handle().spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+
+                let (docker_builder, kubectl, helm_runner) = {
+                    let s = state.lock().unwrap();
+                    (s.docker_builder(), s.kubectl_runner(), s.helm_runner())
+                };
+
+                let (report, pods) = health::full_check(
+                    &docker_builder,
+                    &kubectl,
+                    &helm_runner,
+                ).await;
+
+                let ui = ui_handle.clone();
+                let state2 = state.clone();
+                slint::invoke_from_event_loop(move || {
+                    {
+                        let mut s = state2.lock().unwrap();
+                        s.cluster_healthy = report.overall() == health::ComponentHealth::Healthy;
+                        s.pods = pods;
+                    }
+
+                    if let Some(ui) = ui.upgrade() {
+                        ui.set_docker_status(report.docker.as_str().into());
+                        ui.set_cluster_status(report.cluster.as_str().into());
+                        ui.set_node_status(report.node.as_str().into());
+                        ui.set_helm_release_status(report.helm_release.as_str().into());
+                        ui.set_containers_status(report.pods.as_str().into());
+                        ui.set_memory_usage_text(report.memory_usage_text().into());
+                    }
+
+                    sync_pods(&ui, &state2);
+                }).ok();
+            }
+        });
+    }
+
     ui.run()?;
     Ok(())
 }
