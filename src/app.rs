@@ -10,6 +10,7 @@ use crate::terraform::TerraformRunner;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use sysinfo::System;
 
 /// Shared application state
 pub struct AppState {
@@ -88,8 +89,24 @@ impl AppState {
             Platform::Windows => "windows",
         };
         let vars_path = PathBuf::from(self.terraform_dir()).join("terraform.auto.tfvars");
-        std::fs::write(&vars_path, format!("platform = \"{}\"\n", platform_str))?;
+        let memory_limit = self.compute_cluster_memory_limit();
+        std::fs::write(
+            &vars_path,
+            format!(
+                "platform = \"{}\"\ncluster_memory_limit = \"{}m\"\n",
+                platform_str, memory_limit
+            ),
+        )?;
         Ok(())
+    }
+
+    /// Compute the cluster memory limit in megabytes based on system RAM and config percentage.
+    fn compute_cluster_memory_limit(&self) -> u64 {
+        let mut sys = System::new();
+        sys.refresh_memory();
+        let total_mb = sys.total_memory() / 1024 / 1024;
+        let percent = self.config.cluster_memory_percent.clamp(50, 95) as u64;
+        total_mb * percent / 100
     }
 
     pub fn terraform_runner(&self) -> TerraformRunner {
@@ -117,6 +134,7 @@ impl AppState {
         DockerBuilder::new(
             platform::docker_binary(&self.platform),
             &self.docker_dir(),
+            &self.platform,
         )
     }
 
@@ -292,7 +310,8 @@ mod tests {
 
         state.write_terraform_vars().expect("write vars");
         let content = std::fs::read_to_string(tf_dir.join("terraform.auto.tfvars")).unwrap();
-        assert_eq!(content, "platform = \"windows\"\n");
+        assert!(content.contains("platform = \"windows\""));
+        assert!(content.contains("cluster_memory_limit = \""));
     }
 
     #[test]
@@ -308,6 +327,27 @@ mod tests {
 
         state.write_terraform_vars().expect("write vars");
         let content = std::fs::read_to_string(tf_dir.join("terraform.auto.tfvars")).unwrap();
-        assert_eq!(content, "platform = \"linux\"\n");
+        assert!(content.contains("platform = \"linux\""));
+        assert!(content.contains("cluster_memory_limit = \""));
+    }
+
+    #[test]
+    fn write_terraform_vars_includes_memory_limit() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let tf_dir = tmp.path().join("terraform");
+        std::fs::create_dir(&tf_dir).unwrap();
+
+        let mut state = make_state();
+        state.config.terraform_dir = "terraform".to_string();
+        state.project_root = tmp.path().to_path_buf();
+        state.platform = Platform::Windows;
+        state.config.cluster_memory_percent = 75;
+
+        state.write_terraform_vars().expect("write vars");
+        let content = std::fs::read_to_string(tf_dir.join("terraform.auto.tfvars")).unwrap();
+        assert!(content.contains("platform = \"windows\""));
+        assert!(content.contains("cluster_memory_limit = \""));
+        // The value should be a number followed by m (megabytes)
+        assert!(content.contains("m\""));
     }
 }
