@@ -846,8 +846,14 @@ fn main() -> anyhow::Result<()> {
 
                 slint::invoke_from_event_loop(move || {
                     let log_text = match result {
-                        Ok(r) => {
+                        Ok(r) if r.success && !r.stdout.trim().is_empty() => {
                             format!("--- Logs for {} ---\n{}", pod_name, r.stdout)
+                        }
+                        Ok(r) if !r.stderr.trim().is_empty() => {
+                            format!("--- Logs for {} ---\n{}", pod_name, r.stderr.trim())
+                        }
+                        Ok(_) => {
+                            format!("--- Logs for {} ---\n(no output yet)", pod_name)
                         }
                         Err(e) => format!("Logs error: {}", e),
                     };

@@ -10,8 +10,8 @@ export component StatusBadge inherits Rectangle {
 
     background: {
         if status == "Running" || status == "Healthy" || status == "Found" { return Theme.success; }
-        if status == "Pending" || status == "Starting" || status == "Degraded" { return Theme.warning; }
-        if status == "Failed" || status == "Error" || status == "Missing" { return Theme.error; }
+        if status == "Pending" || status == "Starting" || status == "Degraded" || status == "ContainerCreating" { return Theme.warning; }
+        if status == "Failed" || status == "Error" || status == "Missing" || status == "CrashLoopBackOff" || status == "ImagePullBackOff" || status == "ErrImageNeverPull" { return Theme.error; }
         return Theme.surface-alt;
     };
 
@@ -25,7 +25,7 @@ export component StatusBadge inherits Rectangle {
             font-size: 11px;
             font-weight: 700;
             color: {
-                if root.status == "Pending" || root.status == "Starting" || root.status == "Degraded" { return #1a1a2e; }
+                if root.status == "Pending" || root.status == "Starting" || root.status == "Degraded" || root.status == "ContainerCreating" { return #1a1a2e; }
                 return #ffffff;
             };
             vertical-alignment: center;

@@ -125,6 +125,16 @@ impl KubectlRunner {
                     })
                     .unwrap_or((false, 0));
 
+                // Use container waiting reason as phase if available (more descriptive)
+                let display_phase = container_statuses
+                    .and_then(|cs| cs.first())
+                    .and_then(|cs| {
+                        cs["state"]["waiting"]["reason"]
+                            .as_str()
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or(phase);
+
                 let age = format_age(
                     item["metadata"]["creationTimestamp"]
                         .as_str()
@@ -134,7 +144,7 @@ impl KubectlRunner {
                 pods.push(PodStatus {
                     name,
                     project,
-                    phase,
+                    phase: display_phase,
                     ready,
                     restart_count,
                     age,
@@ -165,7 +175,19 @@ impl KubectlRunner {
 
     pub async fn get_logs(&self, pod_name: &str, tail_lines: u32) -> AppResult<CmdResult> {
         let tail = tail_lines.to_string();
-        self.run(&["logs", "-n", &self.namespace, pod_name, "--tail", &tail])
+        let result = self
+            .run(&["logs", "-n", &self.namespace, pod_name, "--tail", &tail])
+            .await?;
+
+        // If logs failed (e.g. container not started), fall back to describe
+        if !result.success {
+            return self.describe_pod(pod_name).await;
+        }
+        Ok(result)
+    }
+
+    pub async fn describe_pod(&self, pod_name: &str) -> AppResult<CmdResult> {
+        self.run(&["describe", "pod", "-n", &self.namespace, pod_name])
             .await
     }
 
