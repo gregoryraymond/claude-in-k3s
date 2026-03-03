@@ -1126,6 +1126,26 @@ fn main() -> anyhow::Result<()> {
                     &helm_runner,
                 ).await;
 
+                // Check for recoverable pod issues
+                let pod_actions = recovery::diagnose_pod_issues(&pods);
+                for action in pod_actions {
+                    if let recovery::RecoveryAction::DeletePod(ref pod_name) = action {
+                        let kubectl2 = {
+                            let s = state.lock().unwrap();
+                            s.kubectl_runner()
+                        };
+                        let _ = kubectl2.delete_pod(pod_name).await;
+
+                        let msg = format!("[Recovery] Deleted crash-looping pod {}. Deployment will recreate.", pod_name);
+                        let state3 = state.clone();
+                        let ui3 = ui_handle.clone();
+                        slint::invoke_from_event_loop(move || {
+                            append_log(&state3, &msg);
+                            sync_log(&ui3, &state3);
+                        }).ok();
+                    }
+                }
+
                 let ui = ui_handle.clone();
                 let state2 = state.clone();
                 slint::invoke_from_event_loop(move || {
