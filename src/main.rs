@@ -8,6 +8,7 @@ mod helm;
 mod kubectl;
 mod platform;
 mod projects;
+mod recovery;
 mod terraform;
 
 use app::AppState;
