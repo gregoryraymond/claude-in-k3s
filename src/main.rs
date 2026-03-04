@@ -10,6 +10,7 @@ mod platform;
 mod projects;
 mod recovery;
 mod terraform;
+mod tray;
 
 use app::AppState;
 use projects::BaseImage;
@@ -53,33 +54,50 @@ fn main() -> anyhow::Result<()> {
         ui.set_helm_chart_dir(s.config.helm_chart_dir.clone().into());
     }
 
-    // Set deps state
+    // Set k3s label immediately (doesn't need tool checks)
     {
         let s = state.lock().unwrap();
-        let deps = &s.deps_status;
-        ui.set_all_deps_met(deps.all_met());
         ui.set_k3s_label(platform::k8s_provider_name(&s.platform).into());
+    }
 
-        if let deps::ToolStatus::Found { ref version } = deps.k3s {
-            ui.set_k3s_found(true);
-            ui.set_k3s_version(version.clone().into());
-        }
-        if let deps::ToolStatus::Found { ref version } = deps.terraform {
-            ui.set_terraform_found(true);
-            ui.set_terraform_version(version.clone().into());
-        }
-        if let deps::ToolStatus::Found { ref version } = deps.helm {
-            ui.set_helm_found(true);
-            ui.set_helm_version(version.clone().into());
-        }
-        if let deps::ToolStatus::Found { ref version } = deps.docker {
-            ui.set_docker_found(true);
-            ui.set_docker_version(version.clone().into());
-        }
-        if let deps::ToolStatus::Found { ref version } = deps.claude {
-            ui.set_claude_found(true);
-            ui.set_claude_version(version.clone().into());
-        }
+    // Check deps asynchronously on a background thread so the UI appears instantly
+    {
+        let plat = state.lock().unwrap().platform.clone();
+        let state_for_deps = state.clone();
+        let ui_weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let deps = deps::check_all(&plat);
+            // Store in shared state
+            if let Ok(mut s) = state_for_deps.lock() {
+                s.deps_status = deps.clone();
+            }
+            // Update UI from the event loop thread
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_all_deps_met(deps.all_met());
+                    if let deps::ToolStatus::Found { ref version } = deps.k3s {
+                        ui.set_k3s_found(true);
+                        ui.set_k3s_version(version.clone().into());
+                    }
+                    if let deps::ToolStatus::Found { ref version } = deps.terraform {
+                        ui.set_terraform_found(true);
+                        ui.set_terraform_version(version.clone().into());
+                    }
+                    if let deps::ToolStatus::Found { ref version } = deps.helm {
+                        ui.set_helm_found(true);
+                        ui.set_helm_version(version.clone().into());
+                    }
+                    if let deps::ToolStatus::Found { ref version } = deps.docker {
+                        ui.set_docker_found(true);
+                        ui.set_docker_version(version.clone().into());
+                    }
+                    if let deps::ToolStatus::Found { ref version } = deps.claude {
+                        ui.set_claude_found(true);
+                        ui.set_claude_version(version.clone().into());
+                    }
+                }
+            });
+        });
     }
 
     // --- Terraform callbacks ---
@@ -467,13 +485,134 @@ fn main() -> anyhow::Result<()> {
                 let model = std::rc::Rc::new(slint::VecModel::from(tabs));
                 u.set_launch_tabs(model.into());
                 u.set_active_launch_tab(0);
+                // Clear previous launch steps
+                u.set_launch_steps(std::rc::Rc::new(slint::VecModel::<LaunchStep>::default()).into());
             }
 
             rt_handle.spawn(async move {
-                // On Windows, ensure k3d cluster exists with volume mounts
-                if plat == platform::Platform::Windows {
+                // Track step indices as we add them dynamically
+                let mut step_idx: usize = 0;
+                let is_windows = plat == platform::Platform::Windows;
+
+                // === Platform-aware infrastructure checks ===
+
+                // Step: WSL (Windows only — Docker Desktop depends on it)
+                if is_windows {
+                    add_step(&ui, "WSL", "running", "Checking...");
+                    let wsl_step = step_idx;
+                    step_idx += 1;
+
+                    let wsl_ok = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        check_wsl_status(),
+                    ).await.unwrap_or(Ok(false)).unwrap_or(false);
+                    if wsl_ok {
+                        update_step(&ui, wsl_step, "done", "Available");
+                        append_to_tab(&ui, 0, "WSL is available.");
+                    } else {
+                        // Try restarting WSL
+                        update_step(&ui, wsl_step, "running", "Restarting WSL...");
+                        append_to_tab(&ui, 0, "WSL not responding — restarting...");
+                        let _ = restart_wsl().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+                        let retry_ok = tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            check_wsl_status(),
+                        ).await.unwrap_or(Ok(false)).unwrap_or(false);
+                        if retry_ok {
+                            update_step(&ui, wsl_step, "done", "Restarted");
+                            append_to_tab(&ui, 0, "WSL restarted successfully.");
+                        } else {
+                            update_step(&ui, wsl_step, "failed", "Not available — Docker Desktop requires WSL2");
+                            append_to_tab(&ui, 0, "WSL restart failed — Docker Desktop needs WSL2 enabled.");
+                        }
+                    }
+                }
+
+                // Step: Docker
+                add_step(&ui, "Docker", "running", "Checking...");
+                let docker_step = step_idx;
+                step_idx += 1;
+
+                let docker_ok = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    docker_builder.is_running(),
+                ).await.unwrap_or(false);
+                if docker_ok {
+                    update_step(&ui, docker_step, "done", "Running");
+                    append_to_tab(&ui, 0, "Docker is running.");
+                } else if is_windows {
+                    // Try launching Docker Desktop
+                    update_step(&ui, docker_step, "running", "Starting Docker Desktop...");
+                    append_to_tab(&ui, 0, "Docker not running — starting Docker Desktop...");
+                    let _ = start_docker_desktop().await;
+
+                    // Wait for Docker to become ready (poll up to 60s)
+                    let mut started = false;
+                    for i in 0..12 {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        update_step(&ui, docker_step, "running", &format!("Waiting for Docker... ({}s)", (i + 1) * 5));
+                        if check_docker_with_timeout(&docker_builder).await {
+                            started = true;
+                            break;
+                        }
+                    }
+
+                    // If start didn't work, try stop then start (clears stuck state)
+                    if !started {
+                        update_step(&ui, docker_step, "running", "Restarting Docker Desktop...");
+                        append_to_tab(&ui, 0, "Docker Desktop not responding — restarting...");
+                        let _ = stop_docker_desktop().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let _ = start_docker_desktop().await;
+
+                        for i in 0..12 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            update_step(&ui, docker_step, "running", &format!("Waiting for restart... ({}s)", (i + 1) * 5));
+                            if check_docker_with_timeout(&docker_builder).await {
+                                started = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if started {
+                        update_step(&ui, docker_step, "done", "Started");
+                        append_to_tab(&ui, 0, "Docker Desktop started successfully.");
+                    } else {
+                        update_step(&ui, docker_step, "failed", "Failed to start");
+                        append_to_tab(&ui, 0, "Could not start Docker Desktop. Please start it manually.");
+                        update_tab_status(&ui, 0, "Failed");
+                        slint::invoke_from_event_loop({
+                            let ui = ui.clone();
+                            move || { set_busy(&ui, false); }
+                        }).ok();
+                        return;
+                    }
+                } else {
+                    update_step(&ui, docker_step, "failed", "Not responding");
+                    append_to_tab(&ui, 0, "Docker not running. Please start Docker and try again.");
+                    update_tab_status(&ui, 0, "Failed");
+                    slint::invoke_from_event_loop({
+                        let ui = ui.clone();
+                        move || { set_busy(&ui, false); }
+                    }).ok();
+                    return;
+                }
+
+                // Step: k3d / k3s cluster
+                let cluster_label = if is_windows { "k3d Cluster" } else { "k3s" };
+                add_step(&ui, cluster_label, "pending", "Waiting...");
+                let cluster_step = step_idx;
+                step_idx += 1;
+
+                if is_windows {
+                    // Windows: ensure k3d cluster exists with volume mounts
+                    update_step(&ui, cluster_step, "running", "Ensuring cluster exists...");
                     append_to_tab(&ui, 0, "Ensuring k3d cluster exists...");
                     if !ensure_k3d_cluster(&state, &ui).await {
+                        update_step(&ui, cluster_step, "failed", "Creation failed");
                         append_to_tab(&ui, 0, "k3d cluster creation failed. Aborting.");
                         update_tab_status(&ui, 0, "Failed");
                         slint::invoke_from_event_loop({
@@ -482,25 +621,69 @@ fn main() -> anyhow::Result<()> {
                         }).ok();
                         return;
                     }
+                    update_step(&ui, cluster_step, "done", "Ready");
                     append_to_tab(&ui, 0, "k3d cluster ready.");
+                } else {
+                    // Linux/macOS/WSL2: verify k3s is reachable
+                    update_step(&ui, cluster_step, "running", "Checking cluster...");
+                    let kubectl = {
+                        let s = state.lock().unwrap();
+                        s.kubectl_runner()
+                    };
+                    let k3s_ok = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        kubectl.get_pods(),
+                    ).await;
+                    match k3s_ok {
+                        Ok(Ok(_)) => {
+                            update_step(&ui, cluster_step, "done", "Reachable");
+                            append_to_tab(&ui, 0, "k3s cluster is reachable.");
+                        }
+                        _ => {
+                            update_step(&ui, cluster_step, "failed", "Not reachable — is k3s running?");
+                            append_to_tab(&ui, 0, "k3s cluster not reachable — continuing, deploy may fail.");
+                        }
+                    }
                 }
+
+                // Add per-project build steps
+                let build_step_start = step_idx;
+                for p in &selected_projects {
+                    add_step(&ui, &format!("Building {}", p.name), "pending", "Waiting...");
+                    step_idx += 1;
+                }
+
+                // Add remaining steps (placeholders)
+                add_step(&ui, "Importing Images", "pending", "Waiting...");
+                let import_step = step_idx;
+                step_idx += 1;
+
+                add_step(&ui, "Helm Deploy", "pending", "Waiting...");
+                let helm_step = step_idx;
+                step_idx += 1;
+
+                add_step(&ui, "Starting Pods", "pending", "Waiting...");
+                let pods_step = step_idx;
 
                 let mut project_tuples = Vec::new();
                 let mut any_failed = false;
 
                 for (i, project) in selected_projects.iter().enumerate() {
                     let tab_idx = (i + 1) as i32; // +1 because tab 0 is Summary
+                    let build_step = build_step_start + i;
 
                     if cancel_flag.load(Ordering::Relaxed) {
                         // Mark remaining as Cancelled
                         for j in i..selected_projects.len() {
                             update_tab_status(&ui, (j + 1) as i32, "Cancelled");
+                            update_step(&ui, build_step_start + j, "failed", "Cancelled");
                         }
                         append_to_tab(&ui, 0, "Cancelled by user.");
                         break;
                     }
 
                     update_tab_status(&ui, tab_idx, "Building");
+                    update_step(&ui, build_step, "running", "Building...");
                     append_to_tab(&ui, 0, &format!("Building '{}'...", project.name));
 
                     let ui_for_line = ui.clone();
@@ -524,11 +707,14 @@ fn main() -> anyhow::Result<()> {
                                 tag,
                             ));
                             update_tab_status(&ui, tab_idx, "Done");
+                            update_step(&ui, build_step, "done", "Built successfully");
                             append_to_tab(&ui, 0, &format!("'{}' built successfully.", project.name));
                         }
                         Ok(r) => {
                             let status = if r.stderr.contains("Cancel") { "Cancelled" } else { "Failed" };
                             update_tab_status(&ui, tab_idx, status);
+                            let step_msg = if status == "Cancelled" { "Cancelled" } else { r.stderr.lines().next().unwrap_or("Failed") };
+                            update_step(&ui, build_step, "failed", step_msg);
                             append_to_tab(&ui, 0, &format!("'{}' failed: {}", project.name, r.stderr.trim()));
                             if status == "Failed" {
                                 any_failed = true;
@@ -536,6 +722,7 @@ fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             update_tab_status(&ui, tab_idx, "Failed");
+                            update_step(&ui, build_step, "failed", &e.to_string());
                             append_to_tab(&ui, 0, &format!("'{}' error: {}", project.name, e));
                             any_failed = true;
                         }
@@ -548,6 +735,10 @@ fn main() -> anyhow::Result<()> {
                     if !cancelled && !any_failed {
                         append_to_tab(&ui, 0, "No projects to deploy.");
                     }
+                    // Mark remaining steps as skipped/failed
+                    update_step(&ui, import_step, if cancelled { "failed" } else { "skipped" }, if cancelled { "Cancelled" } else { "Skipped" });
+                    update_step(&ui, helm_step, if cancelled { "failed" } else { "skipped" }, if cancelled { "Cancelled" } else { "Skipped" });
+                    update_step(&ui, pods_step, if cancelled { "failed" } else { "skipped" }, if cancelled { "Cancelled" } else { "Skipped" });
                     update_tab_status(&ui, 0, if cancelled { "Cancelled" } else if any_failed { "Failed" } else { "Done" });
                     slint::invoke_from_event_loop({
                         let ui = ui.clone();
@@ -556,7 +747,11 @@ fn main() -> anyhow::Result<()> {
                     return;
                 }
 
-                // Deploy via Helm
+                // Step: Importing Images (already done during build_and_import_streaming, mark done)
+                update_step(&ui, import_step, "done", "Images imported");
+
+                // Step: Helm Deploy
+                update_step(&ui, helm_step, "running", "Deploying...");
                 append_to_tab(&ui, 0, "Deploying via Helm...");
 
                 // Detect credentials path (convert for k3d on Windows)
@@ -657,6 +852,17 @@ fn main() -> anyhow::Result<()> {
 
                 let deploy_success = matches!(&result, Ok(r) if r.success);
 
+                // Update helm step based on result
+                if deploy_success {
+                    update_step(&ui, helm_step, "done", "Deployed");
+                } else {
+                    let err_msg = match &result {
+                        Ok(r) => r.stderr.lines().next().unwrap_or("Failed").to_string(),
+                        Err(e) => e.to_string(),
+                    };
+                    update_step(&ui, helm_step, "failed", &err_msg);
+                }
+
                 slint::invoke_from_event_loop({
                     let state = state.clone();
                     let ui = ui.clone();
@@ -687,6 +893,13 @@ fn main() -> anyhow::Result<()> {
                     }
                 }).ok();
 
+                // Update pods step
+                if deploy_success {
+                    update_step(&ui, pods_step, "running", "Waiting for pods...");
+                } else {
+                    update_step(&ui, pods_step, "skipped", "Deploy failed");
+                }
+
                 // Refresh pods after successful deploy (wait a moment for k8s to start them)
                 if deploy_success {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -696,6 +909,7 @@ fn main() -> anyhow::Result<()> {
                     };
                     if let Ok(mut pods) = kubectl.get_pods().await {
                         let _ = kubectl.enrich_pods_with_events(&mut pods).await;
+                        update_step(&ui, pods_step, "done", &format!("{} pod(s) started", pods.len()));
                         let state2 = state.clone();
                         let ui2 = ui.clone();
                         slint::invoke_from_event_loop(move || {
@@ -705,6 +919,8 @@ fn main() -> anyhow::Result<()> {
                             }
                             sync_pods(&ui2, &state2);
                         }).ok();
+                    } else {
+                        update_step(&ui, pods_step, "done", "Pods starting...");
                     }
                 }
             });
@@ -800,11 +1016,19 @@ fn main() -> anyhow::Result<()> {
 
             rt_handle.spawn(async move {
                 let result = kubectl.get_pods().await;
+                let services = kubectl.get_services().await.unwrap_or_default();
 
                 slint::invoke_from_event_loop(move || {
                     match result {
-                        Ok(pods) => {
-                            state.lock().unwrap().pods = pods;
+                        Ok(mut pods) => {
+                            for p in &mut pods {
+                                p.exposed = services.contains(&p.project);
+                            }
+                            {
+                                let mut s = state.lock().unwrap();
+                                merge_pod_selection(&s.pods, &mut pods);
+                                s.pods = pods;
+                            }
                             sync_pods(&ui, &state);
                         }
                         Err(e) => {
@@ -874,14 +1098,12 @@ fn main() -> anyhow::Result<()> {
             let ui = ui_handle.clone();
             let state = state.clone();
 
-            let (kubectl, pod_name) = {
+            let (kubectl, pod_name, restart_count) = {
                 let s = state.lock().unwrap();
-                let name = s
-                    .pods
-                    .get(idx as usize)
-                    .map(|p| p.name.clone())
-                    .unwrap_or_default();
-                (s.kubectl_runner(), name)
+                let pod = s.pods.get(idx as usize);
+                let name = pod.map(|p| p.name.clone()).unwrap_or_default();
+                let restarts = pod.map(|p| p.restart_count).unwrap_or(0);
+                (s.kubectl_runner(), name, restarts)
             };
 
             if pod_name.is_empty() {
@@ -891,19 +1113,44 @@ fn main() -> anyhow::Result<()> {
             rt_handle.spawn(async move {
                 let result = kubectl.get_logs(&pod_name, 100).await;
 
+                // If pod has restarts, also fetch describe to get Events with real errors
+                let events_section = if restart_count > 0 {
+                    if let Ok(desc) = kubectl.describe_pod(&pod_name).await {
+                        if desc.success {
+                            extract_describe_events(&desc.stdout)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 slint::invoke_from_event_loop(move || {
-                    let log_text = match result {
+                    let header = format!("--- Logs for {} ---\n", pod_name);
+
+                    let mut log_text = match result {
                         Ok(r) if r.success && !r.stdout.trim().is_empty() => {
-                            format!("--- Logs for {} ---\n{}", pod_name, r.stdout)
+                            format!("{}{}", header, r.stdout)
                         }
                         Ok(r) if !r.stderr.trim().is_empty() => {
-                            format!("--- Logs for {} ---\n{}", pod_name, r.stderr.trim())
+                            format!("{}{}", header, r.stderr.trim())
                         }
                         Ok(_) => {
-                            format!("--- Logs for {} ---\n(no output yet)", pod_name)
+                            format!("{}(no output yet)", header)
                         }
                         Err(e) => format!("Logs error: {}", e),
                     };
+
+                    if let Some(events) = events_section {
+                        log_text.push_str(&format!(
+                            "\n\n=== Pod Events (restarts: {}) ===\n{}",
+                            restart_count, events
+                        ));
+                    }
+
                     if let Some(u) = ui.upgrade() {
                         u.set_pod_log(log_text.into());
                     }
@@ -930,6 +1177,382 @@ fn main() -> anyhow::Result<()> {
                 ui.set_claude_target_pod(pod_name.into());
                 ui.set_claude_prompt("".into());
             }
+        });
+    }
+
+    // --- Toggle network (expose/unexpose) ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_toggle_network(move |idx| {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            let (kubectl, pod) = {
+                let s = state.lock().unwrap();
+                let pod = s.pods.get(idx as usize).cloned();
+                (s.kubectl_runner(), pod)
+            };
+
+            let pod = match pod {
+                Some(p) => p,
+                None => return,
+            };
+
+            set_busy(&ui, true);
+
+            rt_handle.spawn(async move {
+                if pod.exposed {
+                    // Unexpose: delete service + ingress
+                    let _ = kubectl.delete_service(&pod.project).await;
+                    let _ = kubectl.delete_ingress(&pod.project).await;
+
+                    let msg = format!("Unexposed {}", pod.project);
+                    let state2 = state.clone();
+                    let ui2 = ui.clone();
+                    slint::invoke_from_event_loop(move || {
+                        append_log(&state2, &msg);
+                        sync_log(&ui2, &state2);
+                    }).ok();
+                } else {
+                    // Expose: detect port if needed, create service + ingress
+                    let port = if pod.container_port > 0 {
+                        pod.container_port
+                    } else {
+                        kubectl.detect_listening_port(&pod.name).await
+                    };
+
+                    let svc_result = kubectl.create_service(&pod.project, port).await;
+                    let ing_result = kubectl.create_ingress(&pod.project, port).await;
+
+                    let msg = match (&svc_result, &ing_result) {
+                        (Ok(s), Ok(i)) if s.success && i.success => {
+                            format!("Exposed {} at {}.localhost:{}", pod.project, pod.project, port)
+                        }
+                        _ => {
+                            let mut err = format!("Failed to expose {}", pod.project);
+                            if let Ok(s) = &svc_result {
+                                if !s.success { err.push_str(&format!("\nService: {}", s.stderr.trim())); }
+                            }
+                            if let Ok(i) = &ing_result {
+                                if !i.success { err.push_str(&format!("\nIngress: {}", i.stderr.trim())); }
+                            }
+                            err
+                        }
+                    };
+
+                    let state2 = state.clone();
+                    let ui2 = ui.clone();
+                    slint::invoke_from_event_loop(move || {
+                        append_log(&state2, &msg);
+                        sync_log(&ui2, &state2);
+                    }).ok();
+                }
+
+                // Refresh pods with updated service status
+                let services = kubectl.get_services().await.unwrap_or_default();
+                if let Ok(mut pods) = kubectl.get_pods().await {
+                    let _ = kubectl.enrich_pods_with_events(&mut pods).await;
+                    for p in &mut pods {
+                        p.exposed = services.contains(&p.project);
+                    }
+                    let state2 = state.clone();
+                    let ui2 = ui.clone();
+                    slint::invoke_from_event_loop(move || {
+                        {
+                            let mut s = state2.lock().unwrap();
+                            s.pods = pods;
+                        }
+                        sync_pods(&ui2, &state2);
+                        set_busy(&ui2, false);
+                    }).ok();
+                } else {
+                    slint::invoke_from_event_loop(move || {
+                        set_busy(&ui, false);
+                    }).ok();
+                }
+            });
+        });
+    }
+
+    // --- Pod toggled ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+
+        ui.on_pod_toggled(move |idx, checked| {
+            {
+                let mut s = state.lock().unwrap();
+                if let Some(p) = s.pods.get_mut(idx as usize) {
+                    p.selected = checked;
+                }
+            }
+            sync_pods(&ui_handle, &state);
+        });
+    }
+
+    // --- Toggle select all pods ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+
+        ui.on_toggle_select_all_pods(move || {
+            {
+                let mut s = state.lock().unwrap();
+                let all_selected = !s.pods.is_empty() && s.pods.iter().all(|p| p.selected);
+                let new_val = !all_selected;
+                for p in &mut s.pods {
+                    p.selected = new_val;
+                }
+            }
+            sync_pods(&ui_handle, &state);
+        });
+    }
+
+    // --- Delete selected pods ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_delete_selected_pods(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            let (kubectl, selected_names) = {
+                let s = state.lock().unwrap();
+                let names: Vec<String> = s.pods.iter()
+                    .filter(|p| p.selected)
+                    .map(|p| p.name.clone())
+                    .collect();
+                (s.kubectl_runner(), names)
+            };
+
+            if selected_names.is_empty() {
+                return;
+            }
+
+            set_busy(&ui, true);
+            let count = selected_names.len();
+            append_log(&state, &format!("Deleting {} pod(s)...", count));
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                for name in &selected_names {
+                    let _ = kubectl.delete_pod(name).await;
+                }
+
+                // Refresh pods after deletion
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let result = kubectl.get_pods().await;
+
+                slint::invoke_from_event_loop(move || {
+                    match result {
+                        Ok(pods) => {
+                            state.lock().unwrap().pods = pods;
+                            append_log(&state, &format!("Deleted {} pod(s).", count));
+                        }
+                        Err(e) => {
+                            append_log(&state, &format!("Refresh error after delete: {}", e));
+                        }
+                    }
+                    set_busy(&ui, false);
+                    sync_pods(&ui, &state);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
+    // --- Redeploy selected (re-run helm upgrade for selected pods) ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_redeploy_selected(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            let (helm_runner, project_tuples, credentials_path, kubectl) = {
+                let s = state.lock().unwrap();
+                // Get project names from selected pods
+                let selected: std::collections::HashSet<String> = s.pods.iter()
+                    .filter(|p| p.selected)
+                    .map(|p| p.project.clone())
+                    .collect();
+                // Match against known projects to get full info
+                let tuples: Vec<(String, String, String)> = s.projects.iter()
+                    .filter(|p| selected.contains(&p.name))
+                    .map(|p| {
+                        let host_path = p.path.to_string_lossy().to_string();
+                        let container_path = crate::platform::to_k3d_container_path(&host_path, &s.platform);
+                        let tag = crate::docker::image_tag_for_project(p);
+                        (p.name.clone(), container_path, tag)
+                    })
+                    .collect();
+                let cred = dirs::home_dir()
+                    .map(|h| {
+                        let host_path = h.join(".claude").to_string_lossy().to_string();
+                        crate::platform::to_k3d_container_path(&host_path, &s.platform)
+                    })
+                    .unwrap_or_default();
+                (s.helm_runner(), tuples, cred, s.kubectl_runner())
+            };
+
+            if project_tuples.is_empty() {
+                append_log(&state, "No matching projects found to redeploy.");
+                sync_log(&ui, &state);
+                return;
+            }
+
+            set_busy(&ui, true);
+            let names: Vec<&str> = project_tuples.iter().map(|(n, _, _)| n.as_str()).collect();
+            append_log(&state, &format!("Redeploying: {}...", names.join(", ")));
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                let extra_args: Vec<(&str, &str)> = if !credentials_path.is_empty() {
+                    vec![("claude.credentialsPath", &credentials_path)]
+                } else {
+                    vec![]
+                };
+
+                let result = helm_runner
+                    .install_or_upgrade(&project_tuples, &extra_args)
+                    .await;
+
+                // Wait for pods to restart
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let pods_result = kubectl.get_pods().await;
+
+                slint::invoke_from_event_loop(move || {
+                    match result {
+                        Ok(r) if r.success => {
+                            append_log(&state, "Redeploy successful.");
+                        }
+                        Ok(r) => {
+                            append_log(&state, &format!("Redeploy failed: {}", r.stderr.trim()));
+                        }
+                        Err(e) => {
+                            append_log(&state, &format!("Redeploy error: {}", e));
+                        }
+                    }
+                    if let Ok(pods) = pods_result {
+                        state.lock().unwrap().pods = pods;
+                    }
+                    set_busy(&ui, false);
+                    sync_pods(&ui, &state);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
+    // --- Expose selected ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_expose_selected(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            let (kubectl, pods_to_expose) = {
+                let s = state.lock().unwrap();
+                let pods: Vec<(String, u16)> = s.pods.iter()
+                    .filter(|p| p.selected && !p.exposed)
+                    .map(|p| (p.project.clone(), if p.container_port > 0 { p.container_port } else { 8080 }))
+                    .collect();
+                (s.kubectl_runner(), pods)
+            };
+
+            if pods_to_expose.is_empty() {
+                return;
+            }
+
+            set_busy(&ui, true);
+            let names: Vec<&str> = pods_to_expose.iter().map(|(n, _)| n.as_str()).collect();
+            append_log(&state, &format!("Exposing: {}...", names.join(", ")));
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                for (project, port) in &pods_to_expose {
+                    let _ = kubectl.create_service(project, *port).await;
+                    let _ = kubectl.create_ingress(project, *port).await;
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let pods_result = kubectl.get_pods().await;
+
+                slint::invoke_from_event_loop(move || {
+                    let count = pods_to_expose.len();
+                    if let Ok(pods) = pods_result {
+                        state.lock().unwrap().pods = pods;
+                    }
+                    append_log(&state, &format!("Exposed {} pod(s).", count));
+                    set_busy(&ui, false);
+                    sync_pods(&ui, &state);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
+        });
+    }
+
+    // --- Unexpose selected ---
+    {
+        let ui_handle = ui.as_weak();
+        let state = state.clone();
+        let rt_handle = rt.handle().clone();
+
+        ui.on_unexpose_selected(move || {
+            let ui = ui_handle.clone();
+            let state = state.clone();
+
+            let (kubectl, projects_to_unexpose) = {
+                let s = state.lock().unwrap();
+                let projects: Vec<String> = s.pods.iter()
+                    .filter(|p| p.selected && p.exposed)
+                    .map(|p| p.project.clone())
+                    .collect();
+                (s.kubectl_runner(), projects)
+            };
+
+            if projects_to_unexpose.is_empty() {
+                return;
+            }
+
+            set_busy(&ui, true);
+            append_log(&state, &format!("Unexposing: {}...", projects_to_unexpose.join(", ")));
+            sync_log(&ui, &state);
+
+            rt_handle.spawn(async move {
+                for project in &projects_to_unexpose {
+                    let _ = kubectl.delete_service(project).await;
+                    let _ = kubectl.delete_ingress(project).await;
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let pods_result = kubectl.get_pods().await;
+
+                slint::invoke_from_event_loop(move || {
+                    let count = projects_to_unexpose.len();
+                    if let Ok(pods) = pods_result {
+                        state.lock().unwrap().pods = pods;
+                    }
+                    append_log(&state, &format!("Unexposed {} pod(s).", count));
+                    set_busy(&ui, false);
+                    sync_pods(&ui, &state);
+                    sync_log(&ui, &state);
+                })
+                .ok();
+            });
         });
     }
 
@@ -1250,6 +1873,11 @@ fn main() -> anyhow::Result<()> {
                         ui.set_cluster_status(status.into());
                         ui.set_docker_status(if docker_ok { "Running" } else { "Stopped" }.into());
                         ui.set_containers_status(containers_status.into());
+
+                        // Navigate to Pods page if pods are already running
+                        if pods_result.as_ref().map_or(false, |p| !p.is_empty()) {
+                            ui.set_active_page(2);
+                        }
                     }
                     sync_pods(&ui_handle, &state);
                 })
@@ -1364,6 +1992,7 @@ fn main() -> anyhow::Result<()> {
                     {
                         let mut s = state2.lock().unwrap();
                         s.cluster_healthy = report.overall() == health::ComponentHealth::Healthy;
+                        merge_pod_selection(&s.pods, &mut pods);
                         s.pods = pods;
                     }
 
@@ -1382,7 +2011,80 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    ui.run()?;
+    // --- Ctrl+C handler ---
+    let _ = ctrlc::set_handler(|| {
+        std::process::exit(0);
+    });
+
+    // --- System tray icon ---
+    let tray_state = match tray::TrayState::new() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tracing::warn!("Failed to create tray icon: {}", e);
+            None
+        }
+    };
+
+    // Minimize to tray on close instead of quitting
+    if tray_state.is_some() {
+        ui.window().on_close_requested(|| {
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    // Poll tray menu events via a timer
+    if let Some(ref tray) = tray_state {
+        let show_id = tray.show_item.id().clone();
+        let exit_id = tray.exit_item.id().clone();
+        let ui_weak = ui.as_weak();
+
+        // Update tray status from current state
+        {
+            let s = state.lock().unwrap();
+            let cluster = if s.cluster_healthy { "Healthy" } else { "Unknown" };
+            tray.update_status(cluster, s.pods.len());
+        }
+
+        let state_for_tray = state.clone();
+        let tray_cluster_item = tray.cluster_item.clone();
+        let tray_pods_item = tray.pods_item.clone();
+
+        // Timer that checks for menu events and updates tray status
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(200),
+            move || {
+                // Check for menu clicks
+                if let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                    if event.id == show_id {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.window().show().ok();
+                        }
+                    } else if event.id == exit_id {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.window().hide().ok();
+                        }
+                        slint::quit_event_loop().ok();
+                    }
+                }
+
+                // Sync tray status
+                if let Ok(s) = state_for_tray.try_lock() {
+                    let cluster = if s.cluster_healthy { "Healthy" } else { "Unknown" };
+                    let _ = tray_cluster_item.set_text(format!("Cluster: {}", cluster));
+                    let _ = tray_pods_item.set_text(format!("Pods: {}", s.pods.len()));
+                }
+            },
+        );
+
+        ui.run()?;
+        // Keep timer alive until here
+        drop(timer);
+    } else {
+        ui.run()?;
+    }
+
     Ok(())
 }
 
@@ -1426,9 +2128,20 @@ fn sync_projects(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
     }
 }
 
+/// Preserve selection state when replacing pods from a fresh k8s fetch.
+fn merge_pod_selection(old_pods: &[PodStatus], new_pods: &mut [PodStatus]) {
+    for new_pod in new_pods.iter_mut() {
+        if let Some(old) = old_pods.iter().find(|o| o.name == new_pod.name) {
+            new_pod.selected = old.selected;
+        }
+    }
+}
+
 fn sync_pods(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
     if let Some(ui) = ui.upgrade() {
         let s = state.lock().unwrap();
+        let selected_count = s.pods.iter().filter(|p| p.selected).count();
+        let all_selected = !s.pods.is_empty() && s.pods.iter().all(|p| p.selected);
         let entries: Vec<PodEntry> = s
             .pods
             .iter()
@@ -1440,10 +2153,15 @@ fn sync_pods(ui: &slint::Weak<AppWindow>, state: &Arc<Mutex<AppState>>) {
                 restart_count: p.restart_count as i32,
                 age: p.age.clone().into(),
                 warnings: p.warnings.join(" | ").into(),
+                exposed: p.exposed,
+                container_port: p.container_port as i32,
+                selected: p.selected,
             })
             .collect();
         let model = std::rc::Rc::new(slint::VecModel::from(entries));
         ui.set_pods(model.into());
+        ui.set_all_pods_selected(all_selected);
+        ui.set_selected_pod_count(selected_count as i32);
     }
 }
 
@@ -1628,12 +2346,207 @@ async fn verify_k3d_mounts(required_paths: &[String]) -> bool {
     matches!(result, Ok(output) if output.status.success())
 }
 
+/// Check if Docker is running, with a timeout that kills the process if it hangs.
+/// Prevents zombie `docker info` processes from piling up.
+async fn check_docker_with_timeout(docker_builder: &docker::DockerBuilder) -> bool {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        docker_builder.is_running(),
+    ).await.unwrap_or(false)
+}
+
+/// Check whether WSL2 is installed and available (Windows only).
+/// Runs `wsl --status` and checks exit code.
+async fn check_wsl_status() -> anyhow::Result<bool> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    let output = Command::new("wsl")
+        .args(["--status"])
+        .stdout(StdStdio::piped())
+        .stderr(StdStdio::piped())
+        .output()
+        .await?;
+
+    Ok(output.status.success())
+}
+
+/// Restart WSL (Windows only). Shuts down all WSL instances so they
+/// reinitialize on next use.
+async fn restart_wsl() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    Command::new("wsl")
+        .args(["--shutdown"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await?;
+    Ok(())
+}
+
+/// Launch Docker Desktop (Windows only).
+/// Uses `docker desktop start` (Docker Desktop 4.37+).
+/// Falls back to launching the exe directly if the CLI subcommand isn't available.
+async fn start_docker_desktop() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    let result = Command::new("docker")
+        .args(["desktop", "start"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::piped())
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => return Ok(()),
+        _ => {}
+    }
+
+    // Fallback: launch Docker Desktop exe directly
+    // Common install locations
+    for path in &[
+        r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
+        r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
+    ] {
+        if std::path::Path::new(path).exists() {
+            Command::new(path)
+                .stdout(StdStdio::null())
+                .stderr(StdStdio::null())
+                .spawn()?;
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("Docker Desktop not found")
+}
+
+/// Stop Docker Desktop (Windows only).
+/// Tries `docker desktop stop` with a timeout, then force-kills if stuck.
+async fn stop_docker_desktop() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    // Try graceful stop with 15s timeout
+    let graceful = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new("docker")
+            .args(["desktop", "stop"])
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .output(),
+    ).await;
+
+    if let Ok(Ok(output)) = graceful {
+        if output.status.success() {
+            return Ok(());
+        }
+    }
+
+    // Graceful stop failed or timed out — force kill everything
+    // Kill all Docker-related processes
+    for proc_name in &[
+        "Docker Desktop.exe",
+        "com.docker.backend.exe",
+        "com.docker.build.exe",
+        "docker-desktop.exe",
+    ] {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", proc_name, "/T"])
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .output()
+            .await;
+    }
+
+    // Stop WSL docker-desktop distros and shut down WSL entirely
+    let _ = Command::new("wsl")
+        .args(["-t", "docker-desktop"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await;
+    let _ = Command::new("wsl")
+        .args(["--shutdown"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await;
+
+    // Restart the WslService in case it's stuck
+    // net stop/start requires elevation but will silently fail if not admin
+    let _ = Command::new("net")
+        .args(["stop", "WslService"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await;
+    let _ = Command::new("net")
+        .args(["start", "WslService"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await;
+
+    // Give everything time to fully shut down
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    Ok(())
+}
+
 fn compute_memory_info(percent: u8) -> String {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     let total_gb = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     let limit_gb = total_gb * percent as f64 / 100.0;
     format!("{:.1} GB of {:.1} GB", limit_gb, total_gb)
+}
+
+/// Extract the Events section and Last State from `kubectl describe pod` output.
+fn extract_describe_events(describe_output: &str) -> Option<String> {
+    let mut result = String::new();
+
+    // Extract Last State (shows termination reason with detail)
+    let mut in_last_state = false;
+    let mut last_state_indent = 0;
+    for line in describe_output.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+
+        if trimmed.starts_with("Last State:") {
+            in_last_state = true;
+            last_state_indent = indent;
+            result.push_str(trimmed);
+            result.push('\n');
+            continue;
+        }
+        if in_last_state {
+            if indent > last_state_indent && !trimmed.is_empty() {
+                result.push_str("  ");
+                result.push_str(trimmed);
+                result.push('\n');
+            } else {
+                in_last_state = false;
+            }
+        }
+    }
+
+    // Extract Events section (at the end of describe output)
+    if let Some(events_pos) = describe_output.find("\nEvents:") {
+        let events = &describe_output[events_pos + 1..];
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(events.trim_end());
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 fn format_cmd_result(cmd: &str, r: &error::CmdResult) -> String {
@@ -1675,6 +2588,45 @@ fn append_to_tab(ui: &slint::Weak<AppWindow>, idx: i32, text: &str) {
                 current.push('\n');
                 tab.log_text = current.into();
                 tabs.set_row_data(idx as usize, tab);
+            }
+        }
+    })
+    .ok();
+}
+
+fn add_step(ui: &slint::Weak<AppWindow>, label: &str, status: &str, message: &str) {
+    let ui = ui.clone();
+    let label = label.to_string();
+    let status = status.to_string();
+    let message = message.to_string();
+    slint::invoke_from_event_loop(move || {
+        if let Some(u) = ui.upgrade() {
+            let steps = u.get_launch_steps();
+            let mut vec: Vec<LaunchStep> = (0..steps.row_count())
+                .filter_map(|i| steps.row_data(i))
+                .collect();
+            vec.push(LaunchStep {
+                label: label.into(),
+                status: status.into(),
+                message: message.into(),
+            });
+            u.set_launch_steps(std::rc::Rc::new(slint::VecModel::from(vec)).into());
+        }
+    })
+    .ok();
+}
+
+fn update_step(ui: &slint::Weak<AppWindow>, idx: usize, status: &str, message: &str) {
+    let ui = ui.clone();
+    let status = status.to_string();
+    let message = message.to_string();
+    slint::invoke_from_event_loop(move || {
+        if let Some(u) = ui.upgrade() {
+            let steps = u.get_launch_steps();
+            if let Some(mut step) = steps.row_data(idx) {
+                step.status = status.into();
+                step.message = message.into();
+                steps.set_row_data(idx, step);
             }
         }
     })

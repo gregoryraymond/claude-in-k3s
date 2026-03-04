@@ -4,7 +4,7 @@ import { IconButton } from "icon-button.slint";
 import { StatusBadge } from "status-badge.slint";
 import { DataRow } from "data-row.slint";
 import { LogViewer } from "log-viewer.slint";
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, CheckBox } from "std-widgets.slint";
 
 export struct PodEntry {
     name: string,
@@ -14,6 +14,9 @@ export struct PodEntry {
     restart-count: int,
     age: string,
     warnings: string,
+    exposed: bool,
+    container-port: int,
+    selected: bool,
 }
 
 export component PodsPanel inherits Rectangle {
@@ -25,9 +28,19 @@ export component PodsPanel inherits Rectangle {
     callback delete-pod(int);
     callback view-logs(int);
     callback exec-claude(int);
+    callback toggle-network(int);
     callback send-prompt(string);
+    callback pod-toggled(int, bool);
+    callback toggle-select-all-pods();
+    callback delete-selected-pods();
+    callback redeploy-selected();
+    callback expose-selected();
+    callback unexpose-selected();
     in-out property <string> claude-prompt: "";
     in property <string> claude-target-pod: "";
+    in property <bool> all-pods-selected: false;
+    in property <int> selected-pod-count: 0;
+    in property <string> selected-names: "";
 
     background: Theme.bg;
 
@@ -54,18 +67,85 @@ export component PodsPanel inherits Rectangle {
             }
         }
 
+        // Selection action bar
+        if selected-pod-count > 0 : Rectangle {
+            background: Theme.surface-alt;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.border;
+            height: 40px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: start;
+
+                Text {
+                    text: selected-pod-count + " selected";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { width: 1px; background: Theme.border; }
+
+                IconButton {
+                    icon-source: @image-url("../icons/redeploy.svg");
+                    compact: true;
+                    tooltip: "Redeploy";
+                    enabled: !is-busy;
+                    clicked => { root.redeploy-selected(); }
+                }
+
+                IconButton {
+                    icon-source: @image-url("../icons/network.svg");
+                    compact: true;
+                    tooltip: "Expose";
+                    enabled: !is-busy;
+                    clicked => { root.expose-selected(); }
+                }
+
+                IconButton {
+                    icon-source: @image-url("../icons/network.svg");
+                    compact: true;
+                    tooltip: "Unexpose";
+                    enabled: !is-busy;
+                    primary: true;
+                    clicked => { root.unexpose-selected(); }
+                }
+
+                IconButton {
+                    icon-source: @image-url("../icons/delete.svg");
+                    compact: true;
+                    destructive: true;
+                    tooltip: "Delete";
+                    enabled: !is-busy;
+                    clicked => { root.delete-selected-pods(); }
+                }
+            }
+        }
+
+        // Column headers
         HorizontalLayout {
-            spacing: 4px;
+            spacing: 8px;
             height: 28px;
             padding-left: 12px;
             padding-right: 12px;
 
-            Text { text: "Project"; font-weight: 600; width: 140px; font-size: 11px; color: Theme.text-muted; }
-            Text { text: "Status"; font-weight: 600; width: 90px; font-size: 11px; color: Theme.text-muted; }
-            Text { text: "Ready"; font-weight: 600; width: 50px; font-size: 11px; color: Theme.text-muted; }
-            Text { text: "Restarts"; font-weight: 600; width: 60px; font-size: 11px; color: Theme.text-muted; }
-            Text { text: "Age"; font-weight: 600; width: 140px; font-size: 11px; color: Theme.text-muted; }
-            Text { text: "Actions"; font-weight: 600; horizontal-stretch: 1; font-size: 11px; color: Theme.text-muted; }
+            CheckBox {
+                width: 28px;
+                checked: root.all-pods-selected;
+                toggled => { root.toggle-select-all-pods(); }
+            }
+
+            Text { text: "Project"; font-weight: 600; horizontal-stretch: 1; font-size: 11px; color: Theme.text-muted; vertical-alignment: center; }
+            Text { text: "Status"; font-weight: 600; width: 84px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Ready"; font-weight: 600; width: 44px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Restarts"; font-weight: 600; width: 54px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Age"; font-weight: 600; width: 72px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Actions"; font-weight: 600; width: 132px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
         }
 
         Rectangle { height: 1px; background: Theme.border; }
@@ -80,95 +160,96 @@ export component PodsPanel inherits Rectangle {
                 for pod[idx] in pods: Rectangle {
                     background: mod(idx, 2) == 1 ? Theme.surface-alt : transparent;
 
-                    VerticalLayout {
-                        spacing: 0px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
 
-                        HorizontalLayout {
-                            spacing: 4px;
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            padding-top: 8px;
-                            padding-bottom: 8px;
-
-                            Text {
-                                text: pod.project;
-                                width: 140px;
-                                font-size: 13px;
-                                color: Theme.text;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            HorizontalLayout {
-                                width: 90px;
-                                StatusBadge { status: pod.phase; }
-                            }
-
-                            Text {
-                                text: pod.ready ? "Yes" : "No";
-                                width: 50px;
-                                font-size: 13px;
-                                color: pod.ready ? Theme.success : Theme.error;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: pod.restart-count;
-                                width: 60px;
-                                font-size: 13px;
-                                color: pod.restart-count > 3 ? Theme.error : Theme.text;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: pod.age;
-                                width: 140px;
-                                font-size: 13px;
-                                color: Theme.text-muted;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            HorizontalLayout {
-                                horizontal-stretch: 1;
-                                spacing: 4px;
-
-                                IconButton {
-                                    label: "Logs";
-                                    clicked => { root.view-logs(idx); }
-                                }
-
-                                IconButton {
-                                    label: "Claude";
-                                    clicked => { root.exec-claude(idx); }
-                                }
-
-                                IconButton {
-                                    label: "Delete";
-                                    destructive: true;
-                                    clicked => { root.delete-pod(idx); }
-                                }
-                            }
+                        CheckBox {
+                            width: 28px;
+                            checked: pod.selected;
+                            toggled => { root.pod-toggled(idx, self.checked); }
                         }
 
-                        // Only show warnings for non-healthy pods
-                        if pod.warnings != "" && pod.phase != "Running" : HorizontalLayout {
-                            spacing: 6px;
-                            padding-left: 152px;
-                            padding-bottom: 6px;
+                        Text {
+                            text: pod.project;
+                            horizontal-stretch: 1;
+                            font-size: 13px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
 
-                            Text {
-                                text: "\u{26A0}";
-                                font-size: 11px;
-                                vertical-alignment: center;
+                        HorizontalLayout {
+                            width: 84px;
+                            alignment: center;
+                            vertical-stretch: 0;
+                            StatusBadge { status: pod.phase; }
+                        }
+
+                        Text {
+                            text: pod.ready ? "Yes" : "No";
+                            width: 44px;
+                            font-size: 13px;
+                            color: pod.ready ? Theme.success : Theme.error;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: pod.restart-count;
+                            width: 54px;
+                            font-size: 13px;
+                            color: pod.restart-count > 3 ? Theme.error : Theme.text;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: pod.age;
+                            width: 72px;
+                            font-size: 13px;
+                            color: Theme.text-muted;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+
+                        HorizontalLayout {
+                            width: 132px;
+                            spacing: 4px;
+                            alignment: center;
+
+                            IconButton {
+                                icon-source: @image-url("../icons/log.svg");
+                                compact: true;
+                                tooltip: "Logs";
+                                clicked => { root.view-logs(idx); }
                             }
 
-                            Text {
-                                text: pod.warnings;
-                                font-size: 11px;
-                                color: Theme.error;
-                                wrap: word-wrap;
-                                vertical-alignment: center;
+                            IconButton {
+                                icon-source: @image-url("../icons/claude-icon.svg");
+                                compact: true;
+                                tooltip: "Claude";
+                                clicked => { root.exec-claude(idx); }
+                            }
+
+                            IconButton {
+                                icon-source: @image-url("../icons/network.svg");
+                                compact: true;
+                                tooltip: pod.exposed ? "Unexpose" : "Expose";
+                                primary: pod.exposed;
+                                clicked => { root.toggle-network(idx); }
+                            }
+
+                            IconButton {
+                                icon-source: @image-url("../icons/delete.svg");
+                                compact: true;
+                                tooltip: "Delete";
+                                destructive: true;
+                                clicked => { root.delete-pod(idx); }
                             }
                         }
                     }

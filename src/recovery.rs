@@ -555,6 +555,9 @@ mod tests {
                 restart_count: 10,
                 age: "1h".into(),
                 warnings: vec![],
+                exposed: false,
+                container_port: 0,
+                selected: false,
             },
             crate::kubectl::PodStatus {
                 name: "pod-2".into(),
@@ -564,6 +567,9 @@ mod tests {
                 restart_count: 2,
                 age: "1h".into(),
                 warnings: vec![],
+                exposed: false,
+                container_port: 0,
+                selected: false,
             },
         ];
         let actions = diagnose_pod_issues(&pods);
@@ -581,6 +587,9 @@ mod tests {
             restart_count: 0,
             age: "1h".into(),
             warnings: vec![],
+            exposed: false,
+            container_port: 0,
+            selected: false,
         }];
         let actions = diagnose_pod_issues(&pods);
         assert!(actions.is_empty());
@@ -597,6 +606,9 @@ mod tests {
                 restart_count: 0,
                 age: "5m".into(),
                 warnings: vec![],
+                exposed: false,
+                container_port: 0,
+                selected: false,
             },
             crate::kubectl::PodStatus {
                 name: "claude-code-other-def456".into(),
@@ -606,6 +618,9 @@ mod tests {
                 restart_count: 0,
                 age: "1h".into(),
                 warnings: vec![],
+                exposed: false,
+                container_port: 0,
+                selected: false,
             },
         ];
         let actions = diagnose_image_issues(&pods);
@@ -629,6 +644,9 @@ mod tests {
             restart_count: 0,
             age: "1h".into(),
             warnings: vec![],
+            exposed: false,
+            container_port: 0,
+            selected: false,
         }];
         let actions = diagnose_image_issues(&pods);
         assert!(actions.is_empty());

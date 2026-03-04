@@ -13,6 +13,12 @@ pub struct PodStatus {
     pub age: String,
     /// Specific error/warning badges derived from container state and events.
     pub warnings: Vec<String>,
+    /// Whether a Service+Ingress exists exposing this pod's project.
+    pub exposed: bool,
+    /// Container port from the pod spec (0 = unknown).
+    pub container_port: u16,
+    /// UI selection state (not from k8s).
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +195,14 @@ impl KubectlRunner {
                     }
                 }
 
+                let container_port = item["spec"]["containers"]
+                    .as_array()
+                    .and_then(|cs| cs.first())
+                    .and_then(|c| c["ports"].as_array())
+                    .and_then(|ps| ps.first())
+                    .and_then(|p| p["containerPort"].as_u64())
+                    .unwrap_or(0) as u16;
+
                 let age = format_age(
                     item["metadata"]["creationTimestamp"]
                         .as_str()
@@ -203,6 +217,9 @@ impl KubectlRunner {
                     restart_count,
                     age,
                     warnings,
+                    exposed: false,
+                    container_port,
+                    selected: false,
                 });
             }
         }
@@ -238,6 +255,26 @@ impl KubectlRunner {
         if !result.success {
             return self.describe_pod(pod_name).await;
         }
+
+        // If the pod has restarted, also fetch previous container logs
+        let prev = self
+            .run(&["logs", "-n", &self.namespace, pod_name, "--previous", "--tail", &tail])
+            .await;
+        if let Ok(prev_result) = prev {
+            if prev_result.success && !prev_result.stdout.trim().is_empty() {
+                let mut combined = String::new();
+                combined.push_str("=== Previous container logs (crash reason) ===\n");
+                combined.push_str(&prev_result.stdout);
+                combined.push_str("\n=== Current container logs ===\n");
+                combined.push_str(&result.stdout);
+                return Ok(CmdResult {
+                    success: true,
+                    stdout: combined,
+                    stderr: result.stderr,
+                });
+            }
+        }
+
         Ok(result)
     }
 
@@ -285,6 +322,199 @@ impl KubectlRunner {
     pub async fn delete_pod(&self, pod_name: &str) -> AppResult<CmdResult> {
         self.run(&["delete", "pod", "-n", &self.namespace, pod_name])
             .await
+    }
+
+    /// Detect the first listening TCP port inside a pod.
+    /// Falls back to 8080 if detection fails.
+    pub async fn detect_listening_port(&self, pod_name: &str) -> u16 {
+        let result = self
+            .run(&[
+                "exec",
+                "-n",
+                &self.namespace,
+                pod_name,
+                "--",
+                "sh",
+                "-c",
+                "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
+            ])
+            .await;
+
+        if let Ok(r) = result {
+            if r.success {
+                // Parse lines like "LISTEN 0 128 *:8080 *:*" or "tcp 0 0 0.0.0.0:3000 ..."
+                for line in r.stdout.lines().skip(1) {
+                    // Look for :PORT pattern
+                    for part in line.split_whitespace() {
+                        if let Some(colon_pos) = part.rfind(':') {
+                            if let Ok(port) = part[colon_pos + 1..].parse::<u16>() {
+                                if port > 0 {
+                                    return port;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        8080
+    }
+
+    /// Create a ClusterIP Service for a project.
+    pub async fn create_service(&self, project: &str, port: u16) -> AppResult<CmdResult> {
+        let svc_name = format!("svc-{}", project);
+        let yaml = format!(
+            r#"apiVersion: v1
+kind: Service
+metadata:
+  name: {svc_name}
+  namespace: {ns}
+  labels:
+    claude-code/project: {project}
+spec:
+  selector:
+    claude-code/project: {project}
+  ports:
+    - port: {port}
+      targetPort: {port}
+      protocol: TCP
+"#,
+            svc_name = svc_name,
+            ns = self.namespace,
+            project = project,
+            port = port,
+        );
+
+        let result = Command::new(&self.binary)
+            .args(["apply", "-f", "-", "-n", &self.namespace])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(yaml.as_bytes()).await;
+                    let _ = stdin.shutdown().await;
+                }
+                let output = child.wait_with_output().await?;
+                Ok(CmdResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).into(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into(),
+                })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Create an Ingress routing `{project}.localhost` to the service.
+    pub async fn create_ingress(&self, project: &str, port: u16) -> AppResult<CmdResult> {
+        let ingress_name = format!("ingress-{}", project);
+        let svc_name = format!("svc-{}", project);
+        let host = format!("{}.localhost", project);
+        let yaml = format!(
+            r#"apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {ingress_name}
+  namespace: {ns}
+  labels:
+    claude-code/project: {project}
+spec:
+  rules:
+    - host: {host}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {svc_name}
+                port:
+                  number: {port}
+"#,
+            ingress_name = ingress_name,
+            ns = self.namespace,
+            project = project,
+            host = host,
+            svc_name = svc_name,
+            port = port,
+        );
+
+        let result = Command::new(&self.binary)
+            .args(["apply", "-f", "-", "-n", &self.namespace])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(yaml.as_bytes()).await;
+                    let _ = stdin.shutdown().await;
+                }
+                let output = child.wait_with_output().await?;
+                Ok(CmdResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).into(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into(),
+                })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete the Service for a project.
+    pub async fn delete_service(&self, project: &str) -> AppResult<CmdResult> {
+        let svc_name = format!("svc-{}", project);
+        self.run(&["delete", "svc", &svc_name, "-n", &self.namespace, "--ignore-not-found"])
+            .await
+    }
+
+    /// Delete the Ingress for a project.
+    pub async fn delete_ingress(&self, project: &str) -> AppResult<CmdResult> {
+        let ingress_name = format!("ingress-{}", project);
+        self.run(&["delete", "ingress", &ingress_name, "-n", &self.namespace, "--ignore-not-found"])
+            .await
+    }
+
+    /// Get list of project names that have Services in the namespace.
+    pub async fn get_services(&self) -> AppResult<Vec<String>> {
+        let result = self
+            .run(&[
+                "get",
+                "svc",
+                "-n",
+                &self.namespace,
+                "-l",
+                "claude-code/project",
+                "-o",
+                "json",
+            ])
+            .await?;
+
+        if !result.success {
+            return Ok(vec![]);
+        }
+
+        let svc_list: serde_json::Value = serde_json::from_str(&result.stdout)?;
+        let mut projects = Vec::new();
+
+        if let Some(items) = svc_list["items"].as_array() {
+            for item in items {
+                if let Some(project) = item["metadata"]["labels"]["claude-code/project"].as_str() {
+                    projects.push(project.to_string());
+                }
+            }
+        }
+
+        Ok(projects)
     }
 
     /// Fetch recent events in the namespace and enrich pods with event-sourced warnings.
@@ -351,6 +581,17 @@ impl KubectlRunner {
                         pod.warnings.push(w);
                     }
                 }
+            }
+        }
+
+        // Clear event-sourced warnings for pods that have recovered (Running + Ready)
+        // but keep last-termination warnings (Last:, Exit:) so restart reasons are visible
+        for pod in pods.iter_mut() {
+            if pod.phase == "Running" && pod.ready && pod.restart_count == 0 {
+                pod.warnings.clear();
+            } else if pod.phase == "Running" && pod.ready {
+                // Keep only last-termination warnings for restarted pods
+                pod.warnings.retain(|w| w.starts_with("Last:") || w.starts_with("Exit:"));
             }
         }
 
@@ -675,6 +916,9 @@ ENDJSON
             restart_count: 3,
             age: "2025-01-01T00:00:00Z".to_string(),
             warnings: vec!["OOMKilled".to_string()],
+            exposed: false,
+            container_port: 8080,
+            selected: false,
         };
 
         let cloned = pod.clone();
@@ -686,6 +930,9 @@ ENDJSON
         assert_eq!(pod.restart_count, cloned.restart_count);
         assert_eq!(pod.age, cloned.age);
         assert_eq!(pod.warnings, cloned.warnings);
+        assert_eq!(pod.exposed, cloned.exposed);
+        assert_eq!(pod.container_port, cloned.container_port);
+        assert_eq!(pod.selected, cloned.selected);
     }
 
     #[test]

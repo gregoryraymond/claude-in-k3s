@@ -21,16 +21,24 @@ impl DockerBuilder {
         }
     }
 
-    /// Check whether the Docker daemon is reachable
+    /// Check whether the Docker daemon is reachable.
+    /// Uses `kill_on_drop` so the child process is killed if the future is
+    /// cancelled (e.g. by a timeout), preventing zombie `docker info` processes.
     pub async fn is_running(&self) -> bool {
-        Command::new(&self.docker_binary)
+        let mut child = match Command::new(&self.docker_binary)
             .args(["info"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        match child.wait().await {
+            Ok(status) => status.success(),
+            Err(_) => false,
+        }
     }
 
     /// Build a Docker image for a project using the template Dockerfile

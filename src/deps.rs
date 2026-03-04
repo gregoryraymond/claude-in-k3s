@@ -23,6 +23,18 @@ pub struct DepsStatus {
     pub claude: ToolStatus,
 }
 
+impl Default for DepsStatus {
+    fn default() -> Self {
+        Self {
+            k3s: ToolStatus::Missing,
+            terraform: ToolStatus::Missing,
+            helm: ToolStatus::Missing,
+            docker: ToolStatus::Missing,
+            claude: ToolStatus::Missing,
+        }
+    }
+}
+
 impl DepsStatus {
     pub fn all_met(&self) -> bool {
         self.k3s.is_found()
@@ -40,11 +52,9 @@ pub fn check_tool(binary: &str) -> ToolStatus {
 
     match which_result {
         Ok(output) if output.status.success() => {
-            // Try to get version
-            let version = Command::new(binary)
-                .arg("version")
-                .output()
-                .ok()
+            // Try to get version with a timeout to avoid hanging
+            // (e.g. `docker version` blocks when Docker Desktop is shutting down)
+            let version = run_with_timeout(binary, &["version"], std::time::Duration::from_secs(5))
                 .and_then(|o| {
                     let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
                     if out.is_empty() {
@@ -60,6 +70,34 @@ pub fn check_tool(binary: &str) -> ToolStatus {
             ToolStatus::Found { version }
         }
         _ => ToolStatus::Missing,
+    }
+}
+
+/// Run a command with a timeout, returning None if it exceeds the deadline.
+fn run_with_timeout(binary: &str, args: &[&str], timeout: std::time::Duration) -> Option<std::process::Output> {
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child.wait_with_output().ok();
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
     }
 }
 

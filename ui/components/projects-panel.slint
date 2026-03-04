@@ -19,6 +19,12 @@ export struct LaunchTab {
     log-text: string,
 }
 
+export struct LaunchStep {
+    label: string,
+    status: string,   // "pending", "running", "done", "failed", "skipped"
+    message: string,
+}
+
 export component ProjectsPanel inherits Rectangle {
     in property <string> projects-dir: "";
     in-out property <[ProjectEntry]> projects: [];
@@ -28,6 +34,7 @@ export component ProjectsPanel inherits Rectangle {
     in property <bool> all-selected: false;
     in property <[LaunchTab]> launch-tabs: [];
     in-out property <int> active-launch-tab: 0;
+    in property <[LaunchStep]> launch-steps: [];
 
     callback browse-folder();
     callback refresh-projects();
@@ -210,12 +217,122 @@ export component ProjectsPanel inherits Rectangle {
                     }
                 }
 
+                // Hardcoded "Logs" tab — uses index -1
+                Rectangle {
+                    min-width: 80px;
+                    max-width: 200px;
+                    height: 32px;
+                    background: active-launch-tab == -1 ? Theme.surface : Theme.surface-alt;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+
+                    TouchArea {
+                        clicked => { root.active-launch-tab = -1; }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        Text {
+                            text: "Logs";
+                            font-size: 11px;
+                            color: active-launch-tab == -1 ? Theme.text : Theme.text-muted;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
                 Rectangle { horizontal-stretch: 1; }
             }
 
-            LogViewer {
-                text: launch-tabs.length > 0 && active-launch-tab >= 0 && active-launch-tab < launch-tabs.length
-                    ? launch-tabs[active-launch-tab].log-text : "";
+            // Summary tab (index 0): show traffic-light steps
+            if active-launch-tab == 0 && launch-steps.length > 0 : Rectangle {
+                vertical-stretch: 1;
+                background: Theme.surface;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                ScrollView {
+                    VerticalLayout {
+                        spacing: 0px;
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+
+                        for step[sidx] in launch-steps : Rectangle {
+                            height: 36px;
+                            background: mod(sidx, 2) == 1 ? Theme.surface-alt : transparent;
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                spacing: 12px;
+
+                                // Traffic light dot
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    y: 13px;
+                                    border-radius: 5px;
+                                    background: step.status == "done" ? Theme.success :
+                                                step.status == "running" ? Theme.warning :
+                                                step.status == "failed" ? Theme.error :
+                                                step.status == "skipped" ? Theme.border :
+                                                Theme.text-muted;
+                                    opacity: step.status == "skipped" ? 0.5 :
+                                             step.status == "pending" ? 0.4 : 1.0;
+                                }
+
+                                // Step label
+                                Text {
+                                    text: step.label;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    color: step.status == "skipped" ? Theme.text-muted : Theme.text;
+                                    vertical-alignment: center;
+                                    min-width: 160px;
+                                }
+
+                                // Separator dash
+                                Text {
+                                    text: "—";
+                                    font-size: 13px;
+                                    color: Theme.text-muted;
+                                    vertical-alignment: center;
+                                }
+
+                                // Message
+                                Text {
+                                    text: step.message;
+                                    font-size: 13px;
+                                    color: step.status == "failed" ? Theme.error : Theme.text-muted;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Logs tab (index -1): show all combined logs
+            if active-launch-tab == -1 : LogViewer {
+                text: launch-tabs.length > 0 ? launch-tabs[0].log-text : "";
+                vertical-stretch: 1;
+            }
+
+            // Project tabs (index > 0): show the project-specific log
+            if active-launch-tab > 0 && active-launch-tab < launch-tabs.length : LogViewer {
+                text: launch-tabs[active-launch-tab].log-text;
+                vertical-stretch: 1;
+            }
+
+            // Summary tab with no steps yet — show log directly
+            if active-launch-tab == 0 && launch-steps.length == 0 : LogViewer {
+                text: launch-tabs.length > 0 ? launch-tabs[0].log-text : "";
                 vertical-stretch: 1;
             }
         }

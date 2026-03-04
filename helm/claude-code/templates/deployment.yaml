@@ -52,7 +52,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - "pgrep -f 'tail -f' || pgrep -f 'claude' || exit 1"
+                - "ps aux 2>/dev/null | grep -q '[t]ail -f' || ps aux 2>/dev/null | grep -q '[c]laude' || exit 1"
             initialDelaySeconds: {{ $.Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ $.Values.healthCheck.periodSeconds }}
             timeoutSeconds: {{ $.Values.healthCheck.timeoutSeconds }}

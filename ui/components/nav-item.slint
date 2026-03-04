@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 
 export component NavItem inherits Rectangle {
-    in property <string> icon: "";
+    in property <image> icon-source;
     in property <string> label: "";
     in property <bool> active: false;
     callback clicked();
@@ -27,27 +27,28 @@ export component NavItem inherits Rectangle {
         animate width { duration: 120ms; easing: ease-in-out; }
     }
 
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 12px;
-        spacing: 10px;
-        alignment: start;
+    VerticalLayout {
+        alignment: center;
 
-        Text {
-            text: root.icon;
-            font-size: 16px;
-            color: root.active ? Theme.accent : Theme.text-muted;
-            vertical-alignment: center;
-            width: 24px;
-            horizontal-alignment: center;
-        }
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 10px;
+            alignment: start;
 
-        Text {
-            text: root.label;
-            font-size: 13px;
-            font-weight: root.active ? 600 : 400;
-            color: root.active ? Theme.text : Theme.text-muted;
-            vertical-alignment: center;
+            Image {
+                source: root.icon-source;
+                width: 18px;
+                height: 18px;
+                colorize: root.active ? Theme.accent : Theme.text-muted;
+            }
+
+            Text {
+                text: root.label;
+                font-size: 13px;
+                font-weight: root.active ? 600 : 400;
+                color: root.active ? Theme.text : Theme.text-muted;
+            }
         }
     }
 

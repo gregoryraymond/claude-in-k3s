@@ -1,8 +1,9 @@
 import { Theme } from "../theme.slint";
-import { TextEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 
 export component LogViewer inherits Rectangle {
     in property <string> text: "";
+    in-out property <bool> auto-scroll: true;
 
     background: Theme.log-bg;
     border-radius: 6px;
@@ -10,12 +11,44 @@ export component LogViewer inherits Rectangle {
     border-color: Theme.border;
     min-height: 150px;
 
+    // Auto-scroll: when text changes snap viewport to bottom
+    changed text => {
+        if root.auto-scroll {
+            sv.viewport-y = min(0px, -(sv.viewport-height - sv.visible-height));
+        }
+    }
+
     VerticalLayout {
-        TextEdit {
-            text: root.text;
-            font-size: 12px;
-            read-only: true;
-            wrap: word-wrap;
+        sv := ScrollView {
+            vertical-stretch: 1;
+
+            Text {
+                text: root.text;
+                font-size: 12px;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+        }
+
+        // Toggle bar
+        HorizontalLayout {
+            height: 24px;
+            padding-left: 8px;
+            padding-right: 8px;
+            alignment: end;
+
+            toggle-ta := TouchArea {
+                width: auto-label.preferred-width + 8px;
+                mouse-cursor: pointer;
+                clicked => { root.auto-scroll = !root.auto-scroll; }
+
+                auto-label := Text {
+                    text: root.auto-scroll ? "Auto-scroll: ON" : "Auto-scroll: OFF";
+                    font-size: 10px;
+                    color: root.auto-scroll ? Theme.accent : Theme.text-muted;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
 }

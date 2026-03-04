@@ -5,12 +5,12 @@ import { IconButton } from "components/icon-button.slint";
 import { StatusBadge } from "components/status-badge.slint";
 import { FormField } from "components/form-field.slint";
 import { ClusterPanel } from "components/cluster-panel.slint";
-import { ProjectsPanel, ProjectEntry, LaunchTab } from "components/projects-panel.slint";
+import { ProjectsPanel, ProjectEntry, LaunchTab, LaunchStep } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
 import { SetupPanel } from "components/setup-panel.slint";
 import { ScrollView, ComboBox } from "std-widgets.slint";
 
-export { ProjectEntry, PodEntry, LaunchTab }
+export { ProjectEntry, PodEntry, LaunchTab, LaunchStep }
 
 export component AppWindow inherits Window {
     title: "Claude in K3s";
@@ -71,6 +71,7 @@ export component AppWindow inherits Window {
     in property <bool> all-selected: false;
     in property <[LaunchTab]> launch-tabs: [];
     in-out property <int> active-launch-tab: 0;
+    in property <[LaunchStep]> launch-steps: [];
 
     callback cluster-deploy();
     callback terraform-destroy();
@@ -90,7 +91,17 @@ export component AppWindow inherits Window {
     callback delete-pod(int);
     callback view-logs(int);
     callback exec-claude(int);
+    callback toggle-network(int);
     callback send-prompt(string);
+    callback pod-toggled(int, bool);
+    callback toggle-select-all-pods();
+    callback delete-selected-pods();
+    callback redeploy-selected();
+    callback expose-selected();
+    callback unexpose-selected();
+
+    in property <bool> all-pods-selected: false;
+    in property <int> selected-pod-count: 0;
 
     callback save-settings();
 
@@ -133,21 +144,21 @@ export component AppWindow inherits Window {
                 Rectangle { height: 1px; background: Theme.border; }
 
                 NavItem {
-                    icon: "\u{25B6}";
+                    icon-source: @image-url("icons/cluster.svg");
                     label: "Cluster";
                     active: active-page == 0;
                     clicked => { active-page = 0; }
                 }
 
                 NavItem {
-                    icon: "\u{25A3}";
+                    icon-source: @image-url("icons/projects.svg");
                     label: "Projects";
                     active: active-page == 1;
                     clicked => { active-page = 1; }
                 }
 
                 NavItem {
-                    icon: "\u{25CB}";
+                    icon-source: @image-url("icons/pods.svg");
                     label: "Pods";
                     active: active-page == 2;
                     clicked => { active-page = 2; }
@@ -158,7 +169,7 @@ export component AppWindow inherits Window {
                 Rectangle { height: 1px; background: Theme.border; }
 
                 NavItem {
-                    icon: "\u{2699}";
+                    icon-source: @image-url("icons/settings.svg");
                     label: "Settings";
                     active: active-page == 3;
                     clicked => { active-page = 3; }
@@ -238,6 +249,7 @@ export component AppWindow inherits Window {
                 all-selected: root.all-selected;
                 launch-tabs: root.launch-tabs;
                 active-launch-tab <=> root.active-launch-tab;
+                launch-steps: root.launch-steps;
                 browse-folder => { root.browse-folder(); }
                 refresh-projects => { root.refresh-projects(); }
                 launch-selected => { root.launch-selected(); }
@@ -252,11 +264,20 @@ export component AppWindow inherits Window {
                 pods: root.pods;
                 is-busy: root.is-busy;
                 pod-log: root.pod-log;
+                all-pods-selected: root.all-pods-selected;
+                selected-pod-count: root.selected-pod-count;
                 refresh-pods => { root.refresh-pods(); }
                 delete-pod(idx) => { root.delete-pod(idx); }
                 view-logs(idx) => { root.view-logs(idx); }
                 exec-claude(idx) => { root.exec-claude(idx); }
+                toggle-network(idx) => { root.toggle-network(idx); }
                 send-prompt(prompt) => { root.send-prompt(prompt); }
+                pod-toggled(idx, checked) => { root.pod-toggled(idx, checked); }
+                toggle-select-all-pods => { root.toggle-select-all-pods(); }
+                delete-selected-pods => { root.delete-selected-pods(); }
+                redeploy-selected => { root.redeploy-selected(); }
+                expose-selected => { root.expose-selected(); }
+                unexpose-selected => { root.unexpose-selected(); }
                 claude-prompt <=> root.claude-prompt;
                 claude-target-pod: root.claude-target-pod;
             }

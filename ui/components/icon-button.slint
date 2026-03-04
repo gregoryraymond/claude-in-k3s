@@ -2,16 +2,22 @@ import { Theme } from "../theme.slint";
 
 export component IconButton inherits Rectangle {
     in property <string> label: "";
+    in property <string> tooltip: "";
     in property <bool> enabled: true;
     in property <bool> primary: false;
     in property <bool> destructive: false;
+    in property <image> icon-source;
+    in property <bool> compact: false;
     callback clicked();
 
     private property <bool> hovered: ta.has-hover && root.enabled;
     private property <bool> pressed: ta.pressed && root.enabled;
+    private property <bool> has-icon: root.icon-source.width > 0;
+    private property <string> tip-text: root.tooltip != "" ? root.tooltip : root.label;
+    private property <bool> show-tip: root.hovered && root.compact && root.has-icon && root.tip-text != "";
 
-    height: 34px;
-    min-width: 72px;
+    height: compact ? 28px : 34px;
+    min-width: compact ? 28px : 72px;
     horizontal-stretch: 0;
     border-radius: 6px;
     opacity: enabled ? 1.0 : 0.4;
@@ -34,22 +40,57 @@ export component IconButton inherits Rectangle {
 
     animate background { duration: 150ms; easing: ease-in-out; }
 
-    HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+    VerticalLayout {
         alignment: center;
 
-        Text {
-            text: root.label;
-            font-size: 13px;
-            font-weight: 500;
-            color: {
-                if !root.enabled { return Theme.text-muted; }
-                if root.primary || root.hovered || root.pressed { return #ffffff; }
-                return Theme.text;
-            };
-            vertical-alignment: center;
+        HorizontalLayout {
+            padding-left: compact ? 6px : 14px;
+            padding-right: compact ? 6px : 14px;
+            alignment: center;
+
+            if has-icon && compact : Image {
+                source: root.icon-source;
+                width: 16px;
+                height: 16px;
+                colorize: {
+                    if !root.enabled { return Theme.text-muted; }
+                    if root.primary || root.hovered || root.pressed { return #ffffff; }
+                    return Theme.text;
+                };
+            }
+
+            if !has-icon || !compact : Text {
+                text: root.label;
+                font-size: 13px;
+                font-weight: 500;
+                color: {
+                    if !root.enabled { return Theme.text-muted; }
+                    if root.primary || root.hovered || root.pressed { return #ffffff; }
+                    return Theme.text;
+                };
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // Tooltip shown below the button on hover
+    if show-tip : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height + 4px;
+        width: tip-label.preferred-width + 12px;
+        height: tip-label.preferred-height + 6px;
+        border-radius: 4px;
+        background: #1a1a2e;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #00000066;
+
+        tip-label := Text {
+            text: root.tip-text;
+            font-size: 11px;
+            color: #e0e0e0;
             horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 

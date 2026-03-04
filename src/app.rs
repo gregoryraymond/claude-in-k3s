@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::deps::{self, DepsStatus};
+use crate::deps::DepsStatus;
 use crate::docker::DockerBuilder;
 use crate::error::AppResult;
 use crate::helm::HelmRunner;
@@ -32,7 +32,8 @@ impl AppState {
     pub fn new() -> AppResult<Self> {
         let config = AppConfig::load()?;
         let plat = platform::detect_platform();
-        let deps_status = deps::check_all(&plat);
+        // Start with all deps as Missing; checked async on a background thread
+        let deps_status = DepsStatus::default();
 
         let project_root = std::env::current_exe()
             .ok()
