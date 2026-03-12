@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { Card } from "card.slint";
 import { IconButton } from "icon-button.slint";
 import { StatusBadge } from "status-badge.slint";
 import { LogViewer } from "log-viewer.slint";
@@ -18,12 +19,15 @@ export component SetupPanel inherits Rectangle {
     in property <string> claude-version: "";
     in property <string> install-log: "";
     in property <bool> is-installing: false;
+    // SUP-8: Hide terraform row on Windows (platform-name == "Windows")
+    in property <string> platform-name: "Linux";
 
     callback install-missing();
     callback continue-app();
 
     background: Theme.bg;
 
+    ScrollView {
     VerticalLayout {
         padding: 32px;
         spacing: 20px;
@@ -38,72 +42,63 @@ export component SetupPanel inherits Rectangle {
 
         Text {
             text: "The following tools are required to run Claude in K3s.";
-            font-size: 14px;
+            font-size: 13px;
             color: Theme.text-muted;
         }
 
-        Rectangle {
-            background: Theme.surface;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: Theme.border;
-
-            VerticalLayout {
-                padding: 16px;
+        Card {
+            HorizontalLayout {
                 spacing: 12px;
+                height: 28px;
+                alignment: start;
+                StatusBadge { status: k3s-found ? "Found" : "Missing"; }
+                Text { text: k3s-label; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                Text { text: k3s-found ? k3s-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+            }
 
-                HorizontalLayout {
-                    spacing: 12px;
-                    height: 28px;
-                    alignment: start;
-                    StatusBadge { status: k3s-found ? "Found" : "Missing"; }
-                    Text { text: k3s-label; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
-                    Text { text: k3s-found ? k3s-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
-                }
+            // SUP-8: Only show terraform on non-Windows platforms
+            if platform-name != "Windows" : Rectangle { height: 1px; background: Theme.border; }
 
-                Rectangle { height: 1px; background: Theme.border; }
+            if platform-name != "Windows" : HorizontalLayout {
+                spacing: 12px;
+                height: 28px;
+                alignment: start;
+                StatusBadge { status: terraform-found ? "Found" : "Missing"; }
+                Text { text: "terraform"; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                Text { text: terraform-found ? terraform-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+            }
 
-                HorizontalLayout {
-                    spacing: 12px;
-                    height: 28px;
-                    alignment: start;
-                    StatusBadge { status: terraform-found ? "Found" : "Missing"; }
-                    Text { text: "terraform"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
-                    Text { text: terraform-found ? terraform-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
-                }
+            Rectangle { height: 1px; background: Theme.border; }
 
-                Rectangle { height: 1px; background: Theme.border; }
+            HorizontalLayout {
+                spacing: 12px;
+                height: 28px;
+                alignment: start;
+                StatusBadge { status: helm-found ? "Found" : "Missing"; }
+                Text { text: "helm"; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                Text { text: helm-found ? helm-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+            }
 
-                HorizontalLayout {
-                    spacing: 12px;
-                    height: 28px;
-                    alignment: start;
-                    StatusBadge { status: helm-found ? "Found" : "Missing"; }
-                    Text { text: "helm"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
-                    Text { text: helm-found ? helm-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
-                }
+            Rectangle { height: 1px; background: Theme.border; }
 
-                Rectangle { height: 1px; background: Theme.border; }
+            HorizontalLayout {
+                spacing: 12px;
+                height: 28px;
+                alignment: start;
+                StatusBadge { status: docker-found ? "Found" : "Missing"; }
+                Text { text: "docker"; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                Text { text: docker-found ? docker-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
+            }
 
-                HorizontalLayout {
-                    spacing: 12px;
-                    height: 28px;
-                    alignment: start;
-                    StatusBadge { status: docker-found ? "Found" : "Missing"; }
-                    Text { text: "docker"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
-                    Text { text: docker-found ? docker-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
-                }
+            Rectangle { height: 1px; background: Theme.border; }
 
-                Rectangle { height: 1px; background: Theme.border; }
-
-                HorizontalLayout {
-                    spacing: 12px;
-                    height: 28px;
-                    alignment: start;
-                    StatusBadge { status: claude-found ? "Found" : "Missing"; }
-                    Text { text: "claude"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
-                    Text { text: claude-found ? claude-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
-                }
+            HorizontalLayout {
+                spacing: 12px;
+                height: 28px;
+                alignment: start;
+                StatusBadge { status: claude-found ? "Found" : "Missing"; }
+                Text { text: "claude"; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; min-width: 90px; }
+                Text { text: claude-found ? claude-version : "Not installed"; font-size: 13px; color: Theme.text-muted; vertical-alignment: center; }
             }
         }
 
@@ -114,20 +109,22 @@ export component SetupPanel inherits Rectangle {
             IconButton {
                 label: is-installing ? "Installing..." : "Install Missing";
                 primary: true;
-                enabled: !is-installing && !(k3s-found && terraform-found && helm-found && docker-found);
+                // SUP-8: On Windows, terraform is not required
+                enabled: !is-installing && !(k3s-found && (platform-name == "Windows" || terraform-found) && helm-found && docker-found);
                 clicked => { root.install-missing(); }
             }
 
             IconButton {
                 label: "Continue";
-                enabled: !is-installing && k3s-found && terraform-found && helm-found && docker-found;
+                enabled: !is-installing && k3s-found && (platform-name == "Windows" || terraform-found) && helm-found && docker-found;
                 clicked => { root.continue-app(); }
             }
         }
 
         LogViewer {
             text: root.install-log;
-            vertical-stretch: 1;
+            min-height: 200px;
         }
+    }
     }
 }

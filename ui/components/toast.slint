@@ -1,0 +1,138 @@
+import { Theme } from "../theme.slint";
+
+export struct ToastEntry {
+    message: string,
+    level: string,
+    id: int,
+    // ERR-5: Target page to navigate to when clicked (-1 = no navigation)
+    target-page: int,
+}
+
+component ToastItem inherits Rectangle {
+    in property <string> message;
+    in property <string> level;
+    in property <int> toast-id;
+    in property <int> target-page: -1;
+    callback dismiss(int);
+    // ERR-5: Navigate to target page on click
+    callback navigate(int);
+
+    height: 48px;
+    width: 360px;
+    border-radius: 8px;
+    border-width: 1px;
+    clip: true;
+
+    background: {
+        if level == "error"   { return Theme.badge-error-bg; }
+        if level == "warning" { return Theme.badge-pending-bg; }
+        return Theme.surface;
+    };
+
+    border-color: {
+        if level == "error"   { return Theme.badge-error-border; }
+        if level == "warning" { return Theme.badge-pending-border; }
+        return Theme.border;
+    };
+
+    // Left accent bar
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 4px;
+        height: parent.height;
+        background: {
+            if level == "error"   { return Theme.error; }
+            if level == "warning" { return Theme.warning; }
+            return Theme.accent;
+        };
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 8px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 8px;
+        alignment: stretch;
+
+        // ERR-5: Click body to navigate to target page
+        Rectangle {
+            horizontal-stretch: 1;
+            Text {
+                text: root.message;
+                font-size: 12px;
+                font-weight: 500;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            body-touch := TouchArea {
+                mouse-cursor: root.target-page >= 0 ? pointer : default;
+                clicked => {
+                    if root.target-page >= 0 {
+                        root.navigate(root.target-page);
+                        root.dismiss(root.toast-id);
+                    }
+                }
+            }
+        }
+
+        // Dismiss button
+        close-area := Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            vertical-stretch: 0;
+            background: close-touch.has-hover ? Theme.row-hover-bg : transparent;
+
+            Text {
+                text: "\u{00D7}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            close-touch := TouchArea {
+                clicked => { root.dismiss(root.toast-id); }
+            }
+        }
+    }
+}
+
+export component ToastOverlay inherits Rectangle {
+    in property <[ToastEntry]> toasts;
+    callback dismiss-toast(int);
+    // ERR-5: Navigate to page when toast body is clicked
+    callback toast-navigate(int);
+
+    // Overlay is transparent, doesn't block input to content below
+    background: transparent;
+
+    VerticalLayout {
+        alignment: end;
+        spacing: 0px;
+
+        HorizontalLayout {
+            alignment: end;
+            padding-right: 16px;
+            padding-bottom: 16px;
+
+            VerticalLayout {
+                alignment: end;
+                spacing: 8px;
+
+                for entry[idx] in root.toasts : ToastItem {
+                    message: entry.message;
+                    level: entry.level;
+                    toast-id: entry.id;
+                    target-page: entry.target-page;
+                    dismiss(id) => { root.dismiss-toast(id); }
+                    navigate(page) => { root.toast-navigate(page); }
+                }
+            }
+        }
+    }
+}

@@ -36,6 +36,17 @@ impl Default for DepsStatus {
 }
 
 impl DepsStatus {
+    /// Check if all required deps are met for the given platform.
+    /// On Windows, terraform is not required (k3d is used instead).
+    pub fn all_met_for(&self, platform: &Platform) -> bool {
+        let base = self.k3s.is_found() && self.helm.is_found() && self.docker.is_found();
+        match platform {
+            Platform::Windows => base,
+            _ => base && self.terraform.is_found(),
+        }
+    }
+
+    /// Legacy compat: check all deps assuming terraform is required.
     pub fn all_met(&self) -> bool {
         self.k3s.is_found()
             && self.terraform.is_found()
@@ -435,5 +446,45 @@ mod tests {
     fn shell_path_preserves_forward_slashes() {
         let path = std::path::PathBuf::from("/tmp/file.zip");
         assert_eq!(shell_path(&path), "/tmp/file.zip");
+    }
+
+    // SUP-8: Platform-aware all_met_for tests
+    #[test]
+    fn all_met_for_windows_ignores_terraform() {
+        let status = DepsStatus {
+            k3s: ToolStatus::Found { version: "v5.7".into() },
+            terraform: ToolStatus::Missing,
+            helm: ToolStatus::Found { version: "3.12".into() },
+            docker: ToolStatus::Found { version: "24.0".into() },
+            claude: ToolStatus::Missing,
+        };
+        // On Windows, terraform is not required
+        assert!(status.all_met_for(&Platform::Windows));
+        // On Linux, terraform IS required
+        assert!(!status.all_met_for(&Platform::Linux));
+    }
+
+    #[test]
+    fn all_met_for_linux_requires_terraform() {
+        let status = DepsStatus {
+            k3s: ToolStatus::Found { version: "v1.28".into() },
+            terraform: ToolStatus::Found { version: "1.5.0".into() },
+            helm: ToolStatus::Found { version: "3.12".into() },
+            docker: ToolStatus::Found { version: "24.0".into() },
+            claude: ToolStatus::Missing,
+        };
+        assert!(status.all_met_for(&Platform::Linux));
+    }
+
+    #[test]
+    fn all_met_for_windows_still_requires_k3s_helm_docker() {
+        let status = DepsStatus {
+            k3s: ToolStatus::Missing,
+            terraform: ToolStatus::Missing,
+            helm: ToolStatus::Found { version: "3.12".into() },
+            docker: ToolStatus::Found { version: "24.0".into() },
+            claude: ToolStatus::Missing,
+        };
+        assert!(!status.all_met_for(&Platform::Windows));
     }
 }

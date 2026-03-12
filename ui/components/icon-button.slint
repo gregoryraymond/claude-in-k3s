@@ -5,6 +5,7 @@ export component IconButton inherits Rectangle {
     in property <string> tooltip: "";
     in property <bool> enabled: true;
     in property <bool> primary: false;
+    in property <bool> active: false;
     in property <bool> destructive: false;
     in property <image> icon-source;
     in property <bool> compact: false;
@@ -29,9 +30,15 @@ export component IconButton inherits Rectangle {
             if hovered { return Theme.accent-hover; }
             return Theme.accent;
         }
-        if destructive && (hovered || pressed) {
+        if active {
+            if pressed { return Theme.active-press; }
+            if hovered { return Theme.active-hover; }
+            return Theme.active-bg;
+        }
+        if destructive {
             if pressed { return Theme.destructive-press; }
-            return Theme.error;
+            if hovered { return Theme.error; }
+            return Theme.destructive-bg;
         }
         if pressed { return Theme.border; }
         if hovered { return Theme.accent; }
@@ -44,28 +51,35 @@ export component IconButton inherits Rectangle {
         alignment: center;
 
         HorizontalLayout {
-            padding-left: compact ? 6px : 14px;
-            padding-right: compact ? 6px : 14px;
+            padding-left: compact ? 6px : 12px;
+            padding-right: compact ? 6px : 12px;
+            spacing: has-icon && !compact && root.label != "" ? 6px : 0px;
             alignment: center;
 
-            if has-icon && compact : Image {
+            if has-icon : Image {
                 source: root.icon-source;
                 width: 16px;
                 height: 16px;
                 colorize: {
                     if !root.enabled { return Theme.text-muted; }
-                    if root.primary || root.hovered || root.pressed { return #ffffff; }
+                    if root.destructive && (root.hovered || root.pressed) { return Theme.text-light; }
+                    if root.destructive { return Theme.error; }
+                    if root.active { return Theme.success; }
+                    if root.primary || root.hovered || root.pressed { return Theme.text-light; }
                     return Theme.text;
                 };
             }
 
-            if !has-icon || !compact : Text {
+            if !compact && root.label != "" : Text {
                 text: root.label;
                 font-size: 13px;
                 font-weight: 500;
                 color: {
                     if !root.enabled { return Theme.text-muted; }
-                    if root.primary || root.hovered || root.pressed { return #ffffff; }
+                    if root.destructive && (root.hovered || root.pressed) { return Theme.text-light; }
+                    if root.destructive { return Theme.error; }
+                    if root.active { return Theme.success; }
+                    if root.primary || root.hovered || root.pressed { return Theme.text-light; }
                     return Theme.text;
                 };
                 vertical-alignment: center;
@@ -81,14 +95,16 @@ export component IconButton inherits Rectangle {
         width: tip-label.preferred-width + 12px;
         height: tip-label.preferred-height + 6px;
         border-radius: 4px;
-        background: #1a1a2e;
-        drop-shadow-blur: 4px;
-        drop-shadow-color: #00000066;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: Theme.shadow-strong;
 
         tip-label := Text {
             text: root.tip-text;
             font-size: 11px;
-            color: #e0e0e0;
+            color: Theme.text;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

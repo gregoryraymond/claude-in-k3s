@@ -1,25 +1,49 @@
+// Forge — warm industrial. A well-lit workshop where things get built.
 export global Theme {
-    out property <color> bg:          #0f0f1a;
-    out property <color> surface:     #1a1a2e;
-    out property <color> surface-alt: #16162a;
-    out property <color> border:      #2a2a3e;
+    // Surfaces: warm near-blacks, shifting lightness only
+    out property <color> bg:          #121110;  // foundry floor
+    out property <color> surface:     #1c1a18;  // workbench
+    out property <color> surface-alt: #181614;  // anvil
+    out property <color> border:      #2e2a26;  // seam
 
-    out property <color> accent:       #6c63ff;
-    out property <color> accent-hover: #7c73ff;
-    out property <color> accent-press: #5b52ee;
+    // Copper accent — the heat of the forge
+    out property <color> accent:       #d97706;
+    out property <color> accent-hover: #e58a08;
+    out property <color> accent-press: #b96604;
 
-    out property <color> text:       #e0e0e8;
-    out property <color> text-muted: #8888a0;
+    // Text: warm steel and aged patina
+    out property <color> text:       #d4d0cc;
+    out property <color> text-muted: #8a8480;
 
+    // Semantic: status lights on the shop floor
     out property <color> success: #4ade80;
     out property <color> warning: #fbbf24;
-    out property <color> error:   #f87171;
+    out property <color> error:   #ef4444;
 
-    out property <color> log-bg:   #0a0a14;
-    out property <color> log-text: #a0e8a0;
+    // Log: the crucible — darkest surface, ember readout
+    out property <color> log-bg:   #0e0d0c;
+    out property <color> log-text: #c4a882;
 
-    out property <color> nav-active-bg:     #1f1f35;
-    out property <color> nav-hover-bg:      #1a1a30;
-    out property <color> row-hover-bg:      #222240;
+    // Navigation and interaction
+    out property <color> nav-active-bg:     #221e1a;
+    out property <color> nav-hover-bg:      #1e1b18;
+    out property <color> row-hover-bg:      #242120;
+    out property <color> active-bg:         #1a2b1e;
+    out property <color> active-hover:      #223d2a;
+    out property <color> active-press:      #142318;
+    out property <color> destructive-bg:    #2b1612;
     out property <color> destructive-press: #d94040;
+
+    // Semantic badge backgrounds and borders
+    out property <color> badge-healthy-bg:     #1a2b1e;
+    out property <color> badge-healthy-border: #2a5a3a;
+    out property <color> badge-pending-bg:     #2b2212;
+    out property <color> badge-pending-border: #5a4418;
+    out property <color> badge-error-bg:       #2b1612;
+    out property <color> badge-error-border:   #5a2820;
+
+    // Utility
+    out property <color> text-light: #ffffff;
+    out property <color> shadow:     #0a090830;
+    out property <color> shadow-strong: #0a090840;
 }

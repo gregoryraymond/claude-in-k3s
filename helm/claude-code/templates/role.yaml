@@ -1,0 +1,31 @@
+{{- if .Values.project.name }}
+# NET-4: Restrict API access for Claude pods — minimal read-only permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.project.name }}-readonly
+  namespace: {{ .Release.Namespace }}
+rules:
+  # Allow pods to read their own status (needed for health checks)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Allow reading configmaps and secrets in own namespace
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.project.name }}-readonly
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.project.name }}-readonly
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "claude-code.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

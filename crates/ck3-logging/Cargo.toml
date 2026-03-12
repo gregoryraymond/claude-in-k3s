@@ -1,0 +1,15 @@
+[package]
+name = "ck3-logging"
+version = "0.1.0"
+edition = "2021"
+description = "Rolling file + stderr logging for Claude-in-K3s"
+license = "MIT"
+
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

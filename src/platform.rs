@@ -131,6 +131,272 @@ pub fn k3d_volume_flag(host_path: &str, container_path: &str) -> String {
     format!("{}:{}@server:0", host_path, container_path)
 }
 
+/// Open a native terminal window running a command inside a pod via `kubectl exec -it`.
+///
+/// `pod_command` is the command to run inside the pod (e.g. `/bin/sh` or `claude`).
+///
+/// Cross-platform:
+/// - Windows: tries `wt.exe` (Windows Terminal), falls back to `cmd.exe /c start`
+/// - macOS: uses `osascript` to open Terminal.app
+/// - Linux/WSL2: tries common terminals in order: kitty, alacritty, gnome-terminal, konsole, xterm
+pub fn open_terminal_with_kubectl_exec(
+    platform: &Platform,
+    kubectl_bin: &str,
+    namespace: &str,
+    pod_name: &str,
+    pod_command: &str,
+) -> std::io::Result<()> {
+    let kubectl_cmd = format!(
+        "{} exec -it -n {} {} -- {}",
+        kubectl_bin, namespace, pod_name, pod_command
+    );
+
+    match platform {
+        Platform::Windows => {
+            // Try Windows Terminal first, fall back to cmd
+            let wt_result = std::process::Command::new("wt.exe")
+                .args(["--", "cmd", "/k", &kubectl_cmd])
+                .spawn();
+            match wt_result {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    std::process::Command::new("cmd.exe")
+                        .args(["/c", "start", "cmd", "/k", &kubectl_cmd])
+                        .spawn()?;
+                    Ok(())
+                }
+            }
+        }
+        Platform::MacOs => {
+            // Use osascript to open Terminal.app with the command
+            let script = format!(
+                "tell application \"Terminal\" to do script \"{}\"",
+                kubectl_cmd.replace('"', "\\\"")
+            );
+            std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .spawn()?;
+            Ok(())
+        }
+        Platform::Linux | Platform::Wsl2 => {
+            // Try common terminal emulators in preference order
+            let terminals: &[(&str, &[&str])] = &[
+                ("kitty", &["--", "sh", "-c", &kubectl_cmd]),
+                ("alacritty", &["-e", "sh", "-c", &kubectl_cmd]),
+                ("gnome-terminal", &["--", "sh", "-c", &kubectl_cmd]),
+                ("konsole", &["-e", "sh", "-c", &kubectl_cmd]),
+                ("xfce4-terminal", &["-e", &kubectl_cmd]),
+                ("xterm", &["-e", &kubectl_cmd]),
+            ];
+
+            for (term, args) in terminals {
+                if std::process::Command::new(term).args(*args).spawn().is_ok() {
+                    return Ok(());
+                }
+            }
+
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No supported terminal emulator found. Install one of: kitty, alacritty, gnome-terminal, konsole, xfce4-terminal, xterm",
+            ))
+        }
+    }
+}
+
+/// PRJ-55: Get available disk space in bytes for the current drive.
+pub fn available_disk_space() -> Result<u64, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Use GetDiskFreeSpaceExW via std::fs metadata approach
+        // Simpler: parse `wmic` output
+        let output = std::process::Command::new("wmic")
+            .args(["logicaldisk", "where", "DeviceID='C:'", "get", "FreeSpace", "/value"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Some(val) = line.strip_prefix("FreeSpace=") {
+                return val.trim().parse::<u64>().map_err(|e| e.to_string());
+            }
+        }
+        Err("Could not parse disk space".into())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = std::process::Command::new("df")
+            .args(["-B1", "--output=avail", "/"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().skip(1) {
+            if let Ok(bytes) = line.trim().parse::<u64>() {
+                return Ok(bytes);
+            }
+        }
+        Err("Could not parse disk space".into())
+    }
+}
+
+/// Check whether WSL2 is installed and available (Windows only).
+/// Runs `wsl --status` and checks exit code.
+pub async fn check_wsl_status() -> anyhow::Result<bool> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    let output = Command::new("wsl")
+        .args(["--status"])
+        .stdout(StdStdio::piped())
+        .stderr(StdStdio::piped())
+        .output()
+        .await?;
+
+    Ok(output.status.success())
+}
+
+/// Restart WSL (Windows only). Shuts down all WSL instances so they
+/// reinitialize on next use.
+pub async fn restart_wsl() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    Command::new("wsl")
+        .args(["--shutdown"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await?;
+    Ok(())
+}
+
+/// Launch Docker Desktop (Windows only).
+/// Uses `docker desktop start` (Docker Desktop 4.37+).
+/// Falls back to launching the exe directly if the CLI subcommand isn't available.
+pub async fn start_docker_desktop() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    let result = Command::new("docker")
+        .args(["desktop", "start"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::piped())
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => return Ok(()),
+        _ => {}
+    }
+
+    // Fallback: launch Docker Desktop exe directly
+    // Common install locations
+    for path in &[
+        r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
+        r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
+    ] {
+        if std::path::Path::new(path).exists() {
+            Command::new(path)
+                .stdout(StdStdio::null())
+                .stderr(StdStdio::null())
+                .spawn()?;
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("Docker Desktop not found")
+}
+
+/// Stop Docker Desktop (Windows only).
+/// Tries `docker desktop stop` with a timeout, then force-kills if stuck.
+pub async fn stop_docker_desktop() -> anyhow::Result<()> {
+    use std::process::Stdio as StdStdio;
+    use tokio::process::Command;
+
+    // Try graceful stop with 15s timeout
+    let graceful = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new("docker")
+            .args(["desktop", "stop"])
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .output(),
+    ).await;
+
+    if let Ok(Ok(output)) = graceful {
+        if output.status.success() {
+            return Ok(());
+        }
+    }
+
+    // Graceful stop failed or timed out — force kill everything
+    // Kill all Docker-related processes
+    for proc_name in &[
+        "Docker Desktop.exe",
+        "com.docker.backend.exe",
+        "com.docker.build.exe",
+        "docker-desktop.exe",
+    ] {
+        match Command::new("taskkill")
+            .args(["/F", "/IM", proc_name, "/T"])
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .output()
+            .await
+        {
+            Ok(output) if !output.status.success() => {
+                tracing::debug!("taskkill {} returned non-zero (may not be running)", proc_name);
+            }
+            Err(e) => tracing::warn!("Failed to taskkill {}: {}", proc_name, e),
+            _ => {}
+        }
+    }
+
+    // Stop WSL docker-desktop distros and shut down WSL entirely
+    if let Err(e) = Command::new("wsl")
+        .args(["-t", "docker-desktop"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await
+    {
+        tracing::warn!("Failed to terminate WSL docker-desktop distro: {}", e);
+    }
+    if let Err(e) = Command::new("wsl")
+        .args(["--shutdown"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await
+    {
+        tracing::warn!("Failed to shutdown WSL: {}", e);
+    }
+
+    // Restart the WslService in case it's stuck
+    // net stop/start requires elevation but will silently fail if not admin
+    if let Err(e) = Command::new("net")
+        .args(["stop", "WslService"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await
+    {
+        tracing::debug!("net stop WslService failed (may need elevation): {}", e);
+    }
+    if let Err(e) = Command::new("net")
+        .args(["start", "WslService"])
+        .stdout(StdStdio::null())
+        .stderr(StdStdio::null())
+        .output()
+        .await
+    {
+        tracing::debug!("net start WslService failed (may need elevation): {}", e);
+    }
+
+    // Give everything time to fully shut down
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

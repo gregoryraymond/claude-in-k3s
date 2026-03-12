@@ -6,6 +6,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+/// Abstraction over Docker operations for testability.
+///
+/// Concrete implementation: [`DockerBuilder`].
+/// In tests, mock types can implement this trait to control build/import outcomes.
+pub trait DockerOps: Send + Sync {
+    /// Check whether the Docker daemon is reachable.
+    fn is_running(&self) -> impl std::future::Future<Output = bool> + Send;
+
+    /// Check Docker health and return `(is_running, error_detail)`.
+    fn check_health(&self) -> impl std::future::Future<Output = (bool, String)> + Send;
+
+    /// Build and import a project's image with streaming build output.
+    fn build_and_import_streaming(
+        &self,
+        project: &Project,
+        cancel: &AtomicBool,
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> impl std::future::Future<Output = AppResult<CmdResult>> + Send;
+
+    /// Import a Docker image into the k8s cluster.
+    fn import_to_k3s(
+        &self,
+        tag: &str,
+    ) -> impl std::future::Future<Output = AppResult<CmdResult>> + Send;
+}
+
 pub struct DockerBuilder {
     docker_binary: String,
     template_dir: String,
@@ -25,20 +51,57 @@ impl DockerBuilder {
     /// Uses `kill_on_drop` so the child process is killed if the future is
     /// cancelled (e.g. by a timeout), preventing zombie `docker info` processes.
     pub async fn is_running(&self) -> bool {
-        let mut child = match Command::new(&self.docker_binary)
+        let result = self.check_health().await.0;
+        tracing::debug!("Docker is_running: {}", result);
+        result
+    }
+
+    /// Check Docker health and return `(is_running, error_detail)`.
+    /// When Docker is healthy the detail string is empty.  When unhealthy
+    /// the detail describes the reason (daemon not running, permission denied,
+    /// or the raw stderr from `docker info`).
+    pub async fn check_health(&self) -> (bool, String) {
+        let output = match Command::new(&self.docker_binary)
             .args(["info"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
-            .spawn()
+            .output()
+            .await
         {
-            Ok(c) => c,
-            Err(_) => return false,
+            Ok(o) => o,
+            Err(e) => {
+                let detail = if e.kind() == std::io::ErrorKind::NotFound {
+                    "Docker binary not found".to_string()
+                } else {
+                    format!("Docker command failed: {}", e)
+                };
+                return (false, detail);
+            }
         };
-        match child.wait().await {
-            Ok(status) => status.success(),
-            Err(_) => false,
+
+        if output.status.success() {
+            return (true, String::new());
         }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let detail = if stderr.contains("Cannot connect to the Docker daemon")
+            || stderr.contains("Is the docker daemon running")
+            || stderr.contains("connection refused")
+        {
+            "Docker daemon not running".to_string()
+        } else if stderr.contains("permission denied")
+            || stderr.contains("Got permission denied")
+            || stderr.contains("not in the docker group")
+        {
+            "Permission denied - add user to docker group".to_string()
+        } else {
+            // Use first meaningful line of stderr as the detail
+            stderr.lines().find(|l| !l.trim().is_empty())
+                .unwrap_or("Docker check failed")
+                .to_string()
+        };
+        (false, detail)
     }
 
     /// Build a Docker image for a project using the template Dockerfile
@@ -48,6 +111,7 @@ impl DockerBuilder {
         base_image: &BaseImage,
         tag: &str,
     ) -> AppResult<CmdResult> {
+        tracing::info!("Building preset Docker image: tag='{}', base={:?}", tag, base_image);
         let output = Command::new(&self.docker_binary)
             .args([
                 "build",
@@ -64,11 +128,17 @@ impl DockerBuilder {
             .output()
             .await?;
 
-        Ok(CmdResult {
+        let result = CmdResult {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into(),
             stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
+        };
+        if result.success {
+            tracing::info!("Preset Docker image build completed: tag='{}'", tag);
+        } else {
+            tracing::warn!("Preset Docker image build failed: tag='{}': {}", tag, result.stderr.lines().next().unwrap_or(""));
+        }
+        Ok(result)
     }
 
     /// Build a Docker image from a project's custom Dockerfile, then overlay Claude Code
@@ -78,6 +148,7 @@ impl DockerBuilder {
         project: &Project,
         tag: &str,
     ) -> AppResult<CmdResult> {
+        tracing::info!("Building custom Docker image: tag='{}', project='{}'", tag, project.name);
         let dockerfile = if project.path.join(".claude").join("Dockerfile").exists() {
             project.path.join(".claude").join("Dockerfile")
         } else if project.path.join("Dockerfile").exists() {
@@ -130,17 +201,24 @@ impl DockerBuilder {
             .output()
             .await?;
 
-        Ok(CmdResult {
+        let result = CmdResult {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into(),
             stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
+        };
+        if result.success {
+            tracing::info!("Custom Docker image build completed: tag='{}'", tag);
+        } else {
+            tracing::warn!("Custom Docker image build failed: tag='{}': {}", tag, result.stderr.lines().next().unwrap_or(""));
+        }
+        Ok(result)
     }
 
     /// Import a Docker image into the k8s cluster.
     /// On Windows: uses `k3d image import` (images go into k3d's containerd via Docker).
     /// On Linux/macOS/WSL2: uses `docker save | k3s ctr images import`.
     pub async fn import_to_k3s(&self, tag: &str) -> AppResult<CmdResult> {
+        tracing::info!("Importing image '{}' to k3s", tag);
         if self.platform == Platform::Windows {
             // k3d can import directly from the local Docker daemon
             let output = Command::new("k3d")
@@ -150,11 +228,17 @@ impl DockerBuilder {
                 .output()
                 .await?;
 
-            return Ok(CmdResult {
+            let result = CmdResult {
                 success: output.status.success(),
                 stdout: String::from_utf8_lossy(&output.stdout).into(),
                 stderr: String::from_utf8_lossy(&output.stderr).into(),
-            });
+            };
+            if result.success {
+                tracing::info!("Image '{}' imported to k3d successfully", tag);
+            } else {
+                tracing::warn!("Image '{}' import to k3d failed: {}", tag, result.stderr.lines().next().unwrap_or(""));
+            }
+            return Ok(result);
         }
 
         // Linux/macOS/WSL2: docker save <tag> | sudo k3s ctr images import -
@@ -184,24 +268,27 @@ impl DockerBuilder {
 
         let _ = save.wait().await;
 
-        Ok(CmdResult {
+        let result = CmdResult {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into(),
             stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
+        };
+        if result.success {
+            tracing::info!("Image '{}' imported to k3s successfully", tag);
+        } else {
+            tracing::warn!("Image '{}' import to k3s failed: {}", tag, result.stderr.lines().next().unwrap_or(""));
+        }
+        Ok(result)
     }
 
     /// Build a Docker image for a project using the template Dockerfile, with streaming output
-    pub async fn build_preset_streaming<F>(
+    pub async fn build_preset_streaming(
         &self,
         base_image: &BaseImage,
         tag: &str,
         cancel: &AtomicBool,
-        on_line: &F,
-    ) -> AppResult<CmdResult>
-    where
-        F: Fn(&str),
-    {
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> AppResult<CmdResult> {
         let mut child = Command::new(&self.docker_binary)
             .args([
                 "build",
@@ -223,16 +310,13 @@ impl DockerBuilder {
 
     /// Build a Docker image from a project's custom Dockerfile, with streaming output.
     /// After building the custom image, overlays Claude Code installation on top.
-    pub async fn build_custom_streaming<F>(
+    pub async fn build_custom_streaming(
         &self,
         project: &Project,
         tag: &str,
         cancel: &AtomicBool,
-        on_line: &F,
-    ) -> AppResult<CmdResult>
-    where
-        F: Fn(&str),
-    {
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> AppResult<CmdResult> {
         let dockerfile = if project.path.join(".claude").join("Dockerfile").exists() {
             project.path.join(".claude").join("Dockerfile")
         } else if project.path.join("Dockerfile").exists() {
@@ -298,15 +382,12 @@ impl DockerBuilder {
     }
 
     /// Build and import a project's image with streaming build output
-    pub async fn build_and_import_streaming<F>(
+    pub async fn build_and_import_streaming(
         &self,
         project: &Project,
         cancel: &AtomicBool,
-        on_line: &F,
-    ) -> AppResult<CmdResult>
-    where
-        F: Fn(&str),
-    {
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> AppResult<CmdResult> {
         let tag = image_tag_for_project(project);
 
         let build_result = if project.base_image == BaseImage::Custom {
@@ -333,14 +414,11 @@ impl DockerBuilder {
 
     /// Read stdout/stderr from a child process line-by-line, calling on_line for each,
     /// and checking cancel between lines.
-    async fn stream_child_output<F>(
+    async fn stream_child_output(
         child: &mut tokio::process::Child,
         cancel: &AtomicBool,
-        on_line: &F,
-    ) -> AppResult<CmdResult>
-    where
-        F: Fn(&str),
-    {
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> AppResult<CmdResult> {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -431,6 +509,79 @@ impl DockerBuilder {
     }
 }
 
+impl DockerOps for DockerBuilder {
+    async fn is_running(&self) -> bool {
+        DockerBuilder::is_running(self).await
+    }
+
+    async fn check_health(&self) -> (bool, String) {
+        DockerBuilder::check_health(self).await
+    }
+
+    async fn build_and_import_streaming(
+        &self,
+        project: &Project,
+        cancel: &AtomicBool,
+        on_line: &(dyn Fn(&str) + Send + Sync),
+    ) -> AppResult<CmdResult> {
+        DockerBuilder::build_and_import_streaming(self, project, cancel, on_line)
+            .await
+    }
+
+    async fn import_to_k3s(&self, tag: &str) -> AppResult<CmdResult> {
+        DockerBuilder::import_to_k3s(self, tag).await
+    }
+}
+
+/// IMG-1/IMG-3: Remove old/dangling Docker images matching the `claude-code-` prefix.
+/// `keep_tags` is the set of image tags to preserve (currently-deployed images).
+pub async fn cleanup_old_images(
+    docker_binary: &str,
+    keep_tags: &[String],
+) -> AppResult<Vec<String>> {
+    // List all claude-code-* images
+    let output = Command::new(docker_binary)
+        .args(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference=claude-code-*"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let all_images: Vec<String> = stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && l != "<none>:<none>")
+        .collect();
+
+    let mut removed = Vec::new();
+    for image in &all_images {
+        if !keep_tags.contains(image) {
+            let result = Command::new(docker_binary)
+                .args(["rmi", image])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+            if let Ok(r) = result {
+                if r.status.success() {
+                    removed.push(image.clone());
+                }
+            }
+        }
+    }
+
+    // Also prune dangling images
+    let _ = Command::new(docker_binary)
+        .args(["image", "prune", "-f"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+
+    Ok(removed)
+}
+
 /// Generate a deterministic image tag for a project
 pub fn image_tag_for_project(project: &Project) -> String {
     let sanitized = project
@@ -454,6 +605,7 @@ mod tests {
             selected: false,
             base_image: BaseImage::Node,
             has_custom_dockerfile: false,
+            ambiguous: false,
         }
     }
 
@@ -465,6 +617,7 @@ mod tests {
             selected: false,
             base_image: BaseImage::Custom,
             has_custom_dockerfile: true,
+            ambiguous: false,
         }
     }
 
@@ -549,6 +702,7 @@ mod tests {
 
     // ── build_preset with mock docker binary ─────────────────────────
 
+    #[cfg(unix)]
     fn write_mock_script(path: &std::path::Path, content: &str) {
         use std::io::Write;
         #[cfg(unix)]
@@ -666,6 +820,188 @@ mod tests {
             selected: false,
             base_image: BaseImage::Node,
             has_custom_dockerfile: false,
+            ambiguous: false,
+        };
+
+        let result = builder
+            .build_and_import(&project)
+            .await
+            .expect("build_and_import should return Ok with failed CmdResult");
+
+        assert!(!result.success, "build should have failed");
+        assert!(
+            result.stderr.contains("build-error"),
+            "expected stderr to contain 'build-error', got: {}",
+            result.stderr
+        );
+    }
+}
+
+#[cfg(test)]
+mod cross_platform_integration_tests {
+    use super::*;
+    use crate::test_utils::{create_mock_binary, create_mock_binary_with_stderr};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn docker_build_preset_success() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary(mock_dir.path(), "docker", "build-output", 0);
+
+        let template_dir = TempDir::new().unwrap();
+        std::fs::write(
+            template_dir.path().join("Dockerfile.template"),
+            "FROM scratch\n",
+        )
+        .unwrap();
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
+        );
+
+        let result = builder
+            .build_preset(&BaseImage::Node, "test-image:latest")
+            .await
+            .expect("build_preset should succeed");
+
+        assert!(result.success);
+        assert!(
+            result.stdout.contains("build-output"),
+            "expected stdout to contain 'build-output', got: {}",
+            result.stdout
+        );
+    }
+
+    #[tokio::test]
+    async fn docker_build_preset_failure() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary_with_stderr(
+            mock_dir.path(),
+            "docker",
+            "",
+            "build failed",
+            1,
+        );
+
+        let template_dir = TempDir::new().unwrap();
+        std::fs::write(
+            template_dir.path().join("Dockerfile.template"),
+            "FROM scratch\n",
+        )
+        .unwrap();
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
+        );
+
+        let result = builder
+            .build_preset(&BaseImage::Python, "fail-image:latest")
+            .await
+            .expect("build_preset should return Ok even on docker failure");
+
+        assert!(!result.success);
+        assert!(
+            result.stderr.contains("build failed"),
+            "expected stderr to contain 'build failed', got: {}",
+            result.stderr
+        );
+    }
+
+    #[tokio::test]
+    async fn docker_is_running_success() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary(mock_dir.path(), "docker", "Docker info output", 0);
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            "/tmp/templates",
+            &Platform::Linux,
+        );
+
+        assert!(builder.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn docker_is_running_failure() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary_with_stderr(
+            mock_dir.path(),
+            "docker",
+            "",
+            "Cannot connect to the Docker daemon",
+            1,
+        );
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            "/tmp/templates",
+            &Platform::Linux,
+        );
+
+        assert!(!builder.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn docker_check_health_returns_detail_on_failure() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary_with_stderr(
+            mock_dir.path(),
+            "docker",
+            "",
+            "Cannot connect to the Docker daemon",
+            1,
+        );
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            "/tmp/templates",
+            &Platform::Linux,
+        );
+
+        let (running, detail) = builder.check_health().await;
+        assert!(!running);
+        assert!(
+            detail.contains("Docker daemon not running"),
+            "expected health detail about daemon, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn docker_build_and_import_skips_import_on_build_failure() {
+        let mock_dir = TempDir::new().unwrap();
+        let mock_path = create_mock_binary_with_stderr(
+            mock_dir.path(),
+            "docker",
+            "",
+            "build-error",
+            1,
+        );
+
+        let template_dir = TempDir::new().unwrap();
+        std::fs::write(
+            template_dir.path().join("Dockerfile.template"),
+            "FROM scratch\n",
+        )
+        .unwrap();
+
+        let builder = DockerBuilder::new(
+            mock_path.to_str().unwrap(),
+            template_dir.path().to_str().unwrap(),
+            &Platform::Linux,
+        );
+
+        let project = Project {
+            name: "fail-proj".to_string(),
+            path: PathBuf::from("/tmp/nonexistent"),
+            selected: false,
+            base_image: BaseImage::Node,
+            has_custom_dockerfile: false,
+            ambiguous: false,
         };
 
         let result = builder

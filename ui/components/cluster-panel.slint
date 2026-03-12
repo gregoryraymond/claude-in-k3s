@@ -1,8 +1,212 @@
 import { Theme } from "../theme.slint";
 import { Card } from "card.slint";
 import { IconButton } from "icon-button.slint";
-import { StatusBadge } from "status-badge.slint";
 import { LogViewer } from "log-viewer.slint";
+import { ScrollView } from "std-widgets.slint";
+import { PodEntry } from "pods-panel.slint";
+
+// A single layer in the infrastructure stack
+component StackLayer inherits Rectangle {
+    in property <string> label: "";
+    in property <string> status: "Unknown";
+    in property <string> detail: "";
+    in property <bool> dimmed: false;
+
+    private property <color> status-color: {
+        if status == "Running" || status == "Healthy" { return Theme.success; }
+        if status == "Degraded" || status == "Starting" { return Theme.warning; }
+        if status == "Stopped" || status == "Unhealthy" || status == "Failed" { return Theme.error; }
+        return Theme.text-muted;
+    };
+
+    background: Theme.surface;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    height: 52px;
+    opacity: root.dimmed ? 0.35 : 1.0;
+    animate opacity { duration: 200ms; }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
+
+        // Status dot
+        Rectangle {
+            width: 12px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            background: root.status-color;
+        }
+
+        // Label
+        Text {
+            text: root.label;
+            font-size: 13px;
+            font-weight: 600;
+            color: Theme.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        // Detail text (e.g. memory info)
+        if root.detail != "" : Text {
+            text: root.detail;
+            font-size: 11px;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+        }
+
+        // Status text
+        Text {
+            text: root.status;
+            font-size: 13px;
+            font-weight: 500;
+            color: root.status-color;
+            vertical-alignment: center;
+            min-width: 80px;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+// Small pod health indicator tile
+component PodTile inherits Rectangle {
+    in property <string> name: "";
+    in property <string> phase: "Unknown";
+    in property <bool> ready: false;
+    in property <int> restart-count: 0;
+    in property <string> warnings: "";
+
+    private property <bool> running-ok: phase == "Running" && ready;
+    private property <bool> errored: phase == "Failed" || phase == "CrashLoopBackOff" || phase == "ImagePullBackOff" || phase == "ErrImageNeverPull" || restart-count >= 5;
+    private property <bool> pending: phase == "Pending" || phase == "ContainerCreating";
+    // Show as crashing if has warnings and NOT running OK
+    private property <bool> crashing: !running-ok && warnings != "";
+
+    private property <color> tile-color: {
+        if errored || crashing { return Theme.error; }
+        if pending { return Theme.warning; }
+        if running-ok { return Theme.success; }
+        return Theme.text-muted;
+    };
+
+    private property <color> tile-bg: {
+        if errored || crashing { return Theme.badge-error-bg; }
+        if pending { return Theme.badge-pending-bg; }
+        if running-ok { return Theme.badge-healthy-bg; }
+        return Theme.surface;
+    };
+
+    private property <string> display-phase: {
+        if crashing { return "Crashing"; }
+        return root.phase;
+    };
+
+    background: root.tile-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    horizontal-stretch: 1;
+    height: 64px;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        alignment: center;
+
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: center;
+
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.tile-color;
+            }
+        }
+
+        Text {
+            text: root.name;
+            font-size: 11px;
+            font-weight: 500;
+            color: Theme.text;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.display-phase;
+            font-size: 11px;
+            color: root.tile-color;
+            horizontal-alignment: center;
+        }
+    }
+
+    // Tooltip on hover
+    ta := TouchArea {}
+
+    if ta.has-hover && (root.warnings != "" || root.restart-count > 0) : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height + 4px;
+        width: tip-text.preferred-width + 16px;
+        height: tip-text.preferred-height + 8px;
+        border-radius: 4px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: Theme.shadow-strong;
+
+        tip-text := Text {
+            text: root.warnings != "" ? root.warnings :
+                  "Restarts: " + root.restart-count;
+            font-size: 11px;
+            color: Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Memory progress bar
+component MemoryBar inherits Rectangle {
+    in property <string> usage-text: "";
+    in property <int> percent: 0;
+
+    private property <color> bar-color: {
+        if percent > 90 { return Theme.error; }
+        if percent > 70 { return Theme.warning; }
+        return Theme.accent;
+    };
+
+    height: 6px;
+    border-radius: 3px;
+    background: Theme.bg;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width * clamp(root.percent, 0, 100) / 100;
+        height: parent.height;
+        border-radius: 3px;
+        background: root.bar-color;
+        animate width { duration: 300ms; easing: ease-in-out; }
+    }
+}
+
+// Vertical connector between stack layers
+component StackConnector inherits Rectangle {
+    in property <bool> healthy: true;
+
+    width: 2px;
+    height: 8px;
+    background: root.healthy ? Theme.border : Theme.error;
+    opacity: root.healthy ? 0.6 : 1.0;
+}
 
 export component ClusterPanel inherits Rectangle {
     in property <string> cluster-status: "Unknown";
@@ -11,140 +215,332 @@ export component ClusterPanel inherits Rectangle {
     in property <string> node-status: "Unknown";
     in property <string> helm-release-status: "Unknown";
     in property <string> memory-usage-text: "";
+    in property <int> memory-percent: 0;
+    in property <string> cluster-detail: "";
+    in property <string> helm-detail: "";
+    in property <string> docker-detail: "";
+    in property <string> wsl-status: "Unknown";
+    in property <string> recovery-hint: "";
     in property <string> k3s-label: "k3s";
+    in property <string> platform-name: "Windows";
+    in property <[PodEntry]> pods: [];
     in property <string> log-output: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
 
     private property <bool> show-advanced: false;
+    private property <bool> docker-ok: docker-status == "Running" || docker-status == "Healthy";
+    private property <bool> wsl-ok: wsl-status == "Healthy" || wsl-status == "Unknown";
+    private property <bool> cluster-ok: cluster-status == "Healthy";
+    private property <bool> helm-ok: helm-release-status == "Healthy";
 
     callback cluster-deploy();
     callback terraform-destroy();
     callback terraform-plan();
     callback helm-status();
+    callback restart-wsl();
+    callback restart-docker();
+    callback restart-cluster();
 
     background: Theme.bg;
 
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: start;
+    ScrollView {
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
 
             Text {
                 text: "Cluster";
                 font-size: 24px;
                 font-weight: 700;
                 color: Theme.text;
-                vertical-alignment: center;
             }
 
-            StatusBadge { status: cluster-status; }
-        }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
 
-        HorizontalLayout {
-            spacing: 8px;
-            alignment: start;
+                IconButton {
+                    label: cluster-status == "Healthy" ? "Redeploy" : "Deploy";
+                    primary: true;
+                    enabled: !is-busy;
+                    clicked => { root.cluster-deploy(); }
+                }
 
-            IconButton {
-                label: cluster-status == "Healthy" ? "Redeploy" : "Deploy";
-                primary: true;
-                enabled: !is-busy;
-                clicked => { root.cluster-deploy(); }
+                IconButton {
+                    label: show-advanced ? "Hide Advanced" : "Advanced";
+                    enabled: true;
+                    clicked => { show-advanced = !show-advanced; }
+                }
             }
 
-            IconButton {
-                label: show-advanced ? "Hide Advanced" : "Advanced";
-                enabled: true;
-                clicked => { show-advanced = !show-advanced; }
-            }
-        }
-
+            // === Infrastructure Stack ===
         Card {
-            title: "Stack Status";
+            title: "Infrastructure Stack";
 
             VerticalLayout {
-                spacing: 8px;
+                spacing: 0px;
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Docker"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    StatusBadge { status: docker-status; width: 100px; }
+                // --- Pods layer (top) ---
+                if pods.length > 0 : VerticalLayout {
+                    spacing: 0px;
+
+                    Text {
+                        text: "Workloads — " + pods.length + (pods.length == 1 ? " pod" : " pods");
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: Theme.text-muted;
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        for pod in pods : PodTile {
+                            name: pod.project != "" ? pod.project : pod.name;
+                            phase: pod.phase;
+                            ready: pod.ready;
+                            restart-count: pod.restart-count;
+                            warnings: pod.warnings;
+                        }
+                    }
+
+                    // Connector
+                    HorizontalLayout {
+                        alignment: center;
+                        StackConnector { healthy: root.helm-ok; }
+                    }
+                }
+
+                // No pods message
+                if pods.length == 0 && helm-ok : VerticalLayout {
+                    spacing: 0px;
+
+                    Rectangle {
+                        height: 40px;
+                        background: Theme.surface-alt;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        Text {
+                            text: "No pods deployed — go to Projects to launch";
+                            font-size: 12px;
+                            color: Theme.text-muted;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        StackConnector { healthy: root.helm-ok; }
+                    }
+                }
+
+                // --- Helm layer ---
+                StackLayer {
+                    label: "Helm";
+                    status: root.helm-release-status;
+                    detail: root.helm-detail;
+                    dimmed: !root.cluster-ok;
                 }
 
                 HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Cluster (" + k3s-label + ")"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    StatusBadge { status: cluster-status; width: 100px; }
+                    alignment: center;
+                    StackConnector { healthy: root.cluster-ok; }
+                }
+
+                // --- Cluster layer ---
+                StackLayer {
+                    label: "Cluster (" + root.k3s-label + ")";
+                    status: root.cluster-ok ? "Healthy" : root.cluster-status;
+                    detail: root.cluster-detail;
+                    dimmed: !root.docker-ok;
                 }
 
                 HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Containers"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    StatusBadge { status: containers-status; width: 100px; }
+                    alignment: center;
+                    StackConnector { healthy: root.docker-ok; }
                 }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Node"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    StatusBadge { status: node-status; width: 100px; }
+                // --- Docker / Platform layer ---
+                StackLayer {
+                    label: root.platform-name == "Windows" ? "Docker Desktop" : "Docker";
+                    status: root.docker-status;
+                    detail: root.docker-ok ? root.memory-usage-text : root.docker-detail;
+                    dimmed: root.platform-name == "Windows" && !root.wsl-ok;
                 }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Helm Release"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    StatusBadge { status: helm-release-status; width: 100px; }
+                // Memory bar under Docker layer
+                if memory-percent > 0 : VerticalLayout {
+                    padding-top: 4px;
+                    padding-left: 40px;
+                    padding-right: 16px;
+
+                    MemoryBar {
+                        percent: root.memory-percent;
+                    }
+                }
+
+                // --- WSL layer (Windows only, foundation) ---
+                if root.platform-name == "Windows" : VerticalLayout {
+                    spacing: 0px;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        StackConnector { healthy: root.wsl-ok; }
+                    }
+
+                    StackLayer {
+                        label: "WSL";
+                        status: root.wsl-status;
+                    }
                 }
             }
         }
 
-        if memory-usage-text != "" : Text {
-            text: memory-usage-text;
-            font-size: 12px;
-            color: Theme.text-muted;
-        }
+            if root.recovery-hint != "" : Rectangle {
+                background: Theme.badge-error-bg;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.error;
 
-        if show-advanced : Card {
-            title: "Terraform";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 4px;
 
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
+                    Text {
+                        text: "Recovery Failed";
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: Theme.error;
+                    }
 
-                IconButton {
-                    label: "Plan";
-                    enabled: !is-busy && tf-initialized;
-                    clicked => { root.terraform-plan(); }
-                }
-                IconButton {
-                    label: "Destroy";
-                    destructive: true;
-                    enabled: !is-busy && tf-initialized;
-                    clicked => { root.terraform-destroy(); }
-                }
-            }
-        }
-
-        if show-advanced : Card {
-            title: "Helm Release";
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-
-                IconButton {
-                    label: "Status";
-                    enabled: !is-busy;
-                    clicked => { root.helm-status(); }
+                    Text {
+                        text: root.recovery-hint;
+                        font-size: 12px;
+                        color: Theme.text;
+                        wrap: word-wrap;
+                    }
                 }
             }
-        }
 
-        if show-advanced : LogViewer {
-            text: root.log-output;
-            vertical-stretch: 1;
+            if show-advanced : Card {
+                title: "Services";
+
+                VerticalLayout {
+                    spacing: 12px;
+
+                    // WSL (Windows only)
+                    if root.platform-name == "Windows" : HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "WSL";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            min-width: 100px;
+                        }
+
+                        IconButton {
+                            label: "Restart WSL";
+                            destructive: true;
+                            enabled: !is-busy;
+                            clicked => { root.restart-wsl(); }
+                        }
+                    }
+
+                    // Docker
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: root.platform-name == "Windows" ? "Docker Desktop" : "Docker";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            min-width: 100px;
+                        }
+
+                        IconButton {
+                            label: root.platform-name == "Windows" ? "Restart Docker Desktop" : "Restart Docker";
+                            destructive: true;
+                            enabled: !is-busy;
+                            clicked => { root.restart-docker(); }
+                        }
+                    }
+
+                    // Cluster (k3d / k3s)
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "Cluster (" + root.k3s-label + ")";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            min-width: 100px;
+                        }
+
+                        IconButton {
+                            label: "Recreate Cluster";
+                            destructive: true;
+                            enabled: !is-busy;
+                            clicked => { root.restart-cluster(); }
+                        }
+                    }
+                }
+            }
+
+            if show-advanced : Card {
+                title: "Terraform";
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    IconButton {
+                        label: "Plan";
+                        enabled: !is-busy && tf-initialized;
+                        clicked => { root.terraform-plan(); }
+                    }
+                    IconButton {
+                        label: "Destroy";
+                        destructive: true;
+                        enabled: !is-busy && tf-initialized;
+                        clicked => { root.terraform-destroy(); }
+                    }
+                }
+            }
+
+            if show-advanced : Card {
+                title: "Helm";
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    IconButton {
+                        label: "Status";
+                        enabled: !is-busy;
+                        clicked => { root.helm-status(); }
+                    }
+                }
+            }
+
+            if show-advanced : LogViewer {
+                text: root.log-output;
+                min-height: 300px;
+            }
         }
     }
 }

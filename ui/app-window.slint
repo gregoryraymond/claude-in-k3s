@@ -8,9 +8,10 @@ import { ClusterPanel } from "components/cluster-panel.slint";
 import { ProjectsPanel, ProjectEntry, LaunchTab, LaunchStep } from "components/projects-panel.slint";
 import { PodsPanel, PodEntry } from "components/pods-panel.slint";
 import { SetupPanel } from "components/setup-panel.slint";
+import { ToastOverlay, ToastEntry } from "components/toast.slint";
 import { ScrollView, ComboBox } from "std-widgets.slint";
 
-export { ProjectEntry, PodEntry, LaunchTab, LaunchStep }
+export { ProjectEntry, PodEntry, LaunchTab, LaunchStep, ToastEntry }
 
 export component AppWindow inherits Window {
     title: "Claude in K3s";
@@ -28,6 +29,12 @@ export component AppWindow inherits Window {
     in property <string> node-status: "Unknown";
     in property <string> helm-release-status: "Unknown";
     in property <string> memory-usage-text: "";
+    in property <int> memory-percent: 0;
+    in property <string> cluster-detail: "";
+    in property <string> helm-detail: "";
+    in property <string> docker-detail: "";
+    in property <string> wsl-status: "Unknown";
+    in property <string> recovery-hint: "";
     in property <string> cluster-log: "";
     in property <bool> is-busy: false;
     in property <bool> tf-initialized: false;
@@ -38,8 +45,6 @@ export component AppWindow inherits Window {
     in property <[PodEntry]> pods: [];
     in property <string> pod-log: "";
 
-    in-out property <string> claude-prompt: "";
-    in property <string> claude-target-pod: "";
 
     in property <string> platform-name: "Linux";
     in-out property <string> claude-mode: "daemon";
@@ -51,6 +56,8 @@ export component AppWindow inherits Window {
     in property <string> cluster-memory-info: "";
     in-out property <string> terraform-dir: "terraform";
     in-out property <string> helm-chart-dir: "helm/claude-code";
+    // SET-12: Extra host mounts (comma-separated paths)
+    in-out property <string> extra-mounts-text: "";
 
     in property <bool> all-deps-met: true;
     in property <bool> k3s-found: false;
@@ -77,6 +84,9 @@ export component AppWindow inherits Window {
     callback terraform-destroy();
     callback terraform-plan();
     callback helm-status();
+    callback restart-wsl();
+    callback restart-docker();
+    callback restart-cluster();
 
     callback browse-folder();
     callback refresh-projects();
@@ -86,15 +96,16 @@ export component AppWindow inherits Window {
     callback toggle-select-all();
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
+    callback retry-build(string);
 
     callback refresh-pods();
     callback delete-pod(int);
     callback view-logs(int);
     callback exec-claude(int);
+    callback shell-pod(int);
     callback toggle-network(int);
-    callback send-prompt(string);
     callback pod-toggled(int, bool);
-    callback toggle-select-all-pods();
+    callback toggle-select-all-pods(bool);
     callback delete-selected-pods();
     callback redeploy-selected();
     callback expose-selected();
@@ -102,12 +113,21 @@ export component AppWindow inherits Window {
 
     in property <bool> all-pods-selected: false;
     in property <int> selected-pod-count: 0;
+    in property <string> selected-pod-names: "";
 
     callback save-settings();
+    in property <string> settings-error: "";
+
+    // Toast notification system (ERR-2, ERR-3, ERR-4, ERR-5)
+    in property <[ToastEntry]> toasts: [];
+    // show-toast(message, level, target-page) — target-page: -1 = no nav
+    callback show-toast(string, string, int);
+    callback dismiss-toast(int);
 
     callback install-missing();
     callback continue-app();
 
+    // Main content layer + toast overlay, stacked via implicit z-order
     HorizontalLayout {
         spacing: 0px;
 
@@ -127,7 +147,7 @@ export component AppWindow inherits Window {
 
                     Text {
                         text: "CK3";
-                        font-size: 20px;
+                        font-size: 24px;
                         font-weight: 800;
                         color: Theme.accent;
                         vertical-alignment: center;
@@ -175,25 +195,7 @@ export component AppWindow inherits Window {
                     clicked => { active-page = 3; }
                 }
 
-                HorizontalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        y: 4px;
-                        border-radius: 4px;
-                        background: cluster-status == "Healthy" ? Theme.success :
-                                    cluster-status == "Starting" ? Theme.warning : Theme.error;
-                    }
-
-                    Text {
-                        text: is-busy ? "Working..." : cluster-status;
-                        font-size: 11px;
-                        color: Theme.text-muted;
-                    }
-                }
+                Rectangle { height: 12px; }
             }
         }
 
@@ -220,6 +222,7 @@ export component AppWindow inherits Window {
                 claude-version: root.claude-version;
                 install-log: root.install-log;
                 is-installing: root.is-installing;
+                platform-name: root.platform-name;
                 install-missing => { root.install-missing(); }
                 continue-app => { root.continue-app(); }
             }
@@ -231,7 +234,15 @@ export component AppWindow inherits Window {
                 node-status: root.node-status;
                 helm-release-status: root.helm-release-status;
                 memory-usage-text: root.memory-usage-text;
+                memory-percent: root.memory-percent;
+                cluster-detail: root.cluster-detail;
+                helm-detail: root.helm-detail;
+                docker-detail: root.docker-detail;
+                wsl-status: root.wsl-status;
+                recovery-hint: root.recovery-hint;
                 k3s-label: root.k3s-label;
+                platform-name: root.platform-name;
+                pods: root.pods;
                 log-output: root.cluster-log;
                 is-busy: root.is-busy;
                 tf-initialized: root.tf-initialized;
@@ -239,6 +250,9 @@ export component AppWindow inherits Window {
                 terraform-destroy => { root.terraform-destroy(); }
                 terraform-plan => { root.terraform-plan(); }
                 helm-status => { root.helm-status(); }
+                restart-wsl => { root.restart-wsl(); }
+                restart-docker => { root.restart-docker(); }
+                restart-cluster => { root.restart-cluster(); }
             }
 
             if all-deps-met && active-page == 1 : ProjectsPanel {
@@ -258,6 +272,7 @@ export component AppWindow inherits Window {
                 toggle-select-all => { root.toggle-select-all(); }
                 project-toggled(idx, checked) => { root.project-toggled(idx, checked); }
                 project-image-changed(idx, img) => { root.project-image-changed(idx, img); }
+                retry-build(label) => { root.retry-build(label); }
             }
 
             if all-deps-met && active-page == 2 : PodsPanel {
@@ -266,20 +281,19 @@ export component AppWindow inherits Window {
                 pod-log: root.pod-log;
                 all-pods-selected: root.all-pods-selected;
                 selected-pod-count: root.selected-pod-count;
+                selected-names: root.selected-pod-names;
                 refresh-pods => { root.refresh-pods(); }
                 delete-pod(idx) => { root.delete-pod(idx); }
                 view-logs(idx) => { root.view-logs(idx); }
                 exec-claude(idx) => { root.exec-claude(idx); }
+                shell-pod(idx) => { root.shell-pod(idx); }
                 toggle-network(idx) => { root.toggle-network(idx); }
-                send-prompt(prompt) => { root.send-prompt(prompt); }
                 pod-toggled(idx, checked) => { root.pod-toggled(idx, checked); }
-                toggle-select-all-pods => { root.toggle-select-all-pods(); }
+                toggle-select-all-pods(checked) => { root.toggle-select-all-pods(checked); }
                 delete-selected-pods => { root.delete-selected-pods(); }
                 redeploy-selected => { root.redeploy-selected(); }
                 expose-selected => { root.expose-selected(); }
                 unexpose-selected => { root.unexpose-selected(); }
-                claude-prompt <=> root.claude-prompt;
-                claude-target-pod: root.claude-target-pod;
             }
 
             if all-deps-met && active-page == 3 : Rectangle {
@@ -339,6 +353,15 @@ export component AppWindow inherits Window {
                         }
 
                         Card {
+                            title: "Extra Mounts";
+                            VerticalLayout {
+                                spacing: 4px;
+                                FormField { label: "Host Paths (comma-separated)"; text <=> root.extra-mounts-text; placeholder: "/data/shared, /opt/tools"; }
+                                Text { text: "Additional host directories to mount into pods."; font-size: 11px; color: Theme.text-muted; }
+                            }
+                        }
+
+                        Card {
                             title: "Platform Info";
                             Text { text: "Detected platform: " + root.platform-name; font-size: 13px; color: Theme.text; }
                         }
@@ -354,5 +377,13 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Toast overlay — rendered on top of all content (ERR-2, ERR-3, ERR-4, ERR-5)
+    ToastOverlay {
+        toasts: root.toasts;
+        dismiss-toast(id) => { root.dismiss-toast(id); }
+        // ERR-5: Navigate to target page when toast body is clicked
+        toast-navigate(page) => { root.active-page = page; }
     }
 }

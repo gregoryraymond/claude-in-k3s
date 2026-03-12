@@ -1,17 +1,15 @@
 Claude Code Helm chart deployed.
 
 Namespace: {{ .Values.namespace }}
-Projects: {{ len .Values.projects }}
-
-{{- range .Values.projects }}
-  - {{ .name }} ({{ .path }})
+{{- if .Values.project.name }}
+Project: {{ .Values.project.name }} ({{ .Values.project.path }})
 {{- end }}
 
 Check pod status:
   kubectl get pods -n {{ .Values.namespace }}
 
 Exec into a project pod:
-  kubectl exec -it -n {{ .Values.namespace }} deploy/claude-<project-name> -- claude -p --dangerously-skip-permissions "your prompt"
+  kubectl exec -it -n {{ .Values.namespace }} deploy/claude-<project-name> -- claude --dangerously-skip-permissions
 
 View logs:
   kubectl logs -n {{ .Values.namespace }} -l app.kubernetes.io/name=claude-code -f

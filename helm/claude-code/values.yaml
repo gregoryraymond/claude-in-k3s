@@ -12,12 +12,11 @@ claude:
   # Path to host ~/.claude/ directory (auto-detected by GUI)
   credentialsPath: ""
 
-# Projects to deploy - each gets its own Deployment
-# Populated dynamically by the GUI
-projects: []
-# - name: my-project
-#   path: /home/user/projects/my-project
-#   image: claude-code-node:latest
+# Single project to deploy (one helm release per project)
+project:
+  name: ""
+  path: ""
+  image: ""
 
 # Git configuration for pods
 git:
@@ -32,6 +31,13 @@ resources:
   limits:
     cpu: "2"
     memory: 4Gi
+
+# Extra host paths to mount into pods (SET-14)
+extraMounts: []
+# Example:
+# extraMounts:
+#   - /data/shared
+#   - /home/user/datasets
 
 nodeSelector: {}
 tolerations: []

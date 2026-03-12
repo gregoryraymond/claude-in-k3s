@@ -33,9 +33,6 @@ fn ui_property_defaults() {
     assert_eq!(ui.get_docker_status(), "Unknown");
     assert_eq!(ui.get_containers_status(), "Unknown");
 
-    assert_eq!(ui.get_claude_prompt(), "");
-    assert_eq!(ui.get_claude_target_pod(), "");
-
     // -- new property defaults --
     assert!(!ui.get_all_selected());
     assert!(!ui.get_claude_found());
@@ -88,11 +85,6 @@ fn ui_property_defaults() {
     ui.set_helm_chart_dir("custom-helm".into());
     assert_eq!(ui.get_helm_chart_dir(), "custom-helm");
 
-    ui.set_claude_prompt("test prompt".into());
-    assert_eq!(ui.get_claude_prompt(), "test prompt");
-    ui.set_claude_target_pod("my-pod-123".into());
-    assert_eq!(ui.get_claude_target_pod(), "my-pod-123");
-
     // -- set/get all-selected --
     ui.set_all_selected(true);
     assert!(ui.get_all_selected());
@@ -116,6 +108,20 @@ fn ui_property_defaults() {
     ui.set_docker_status("Stopped".into());
     assert_eq!(ui.get_docker_status(), "Stopped");
 
+    // -- set/get recovery-hint (CLU-29) --
+    assert_eq!(ui.get_recovery_hint(), "", "recovery-hint default should be empty");
+    ui.set_recovery_hint("Manual fix: Run 'k3d cluster delete'".into());
+    assert_eq!(ui.get_recovery_hint(), "Manual fix: Run 'k3d cluster delete'");
+    ui.set_recovery_hint("".into());
+    assert_eq!(ui.get_recovery_hint(), "", "recovery-hint should be clearable");
+
+    // -- set/get wsl-status (CLU-4) --
+    assert_eq!(ui.get_wsl_status(), "Unknown", "wsl-status default should be Unknown");
+    ui.set_wsl_status("Healthy".into());
+    assert_eq!(ui.get_wsl_status(), "Healthy");
+    ui.set_wsl_status("Unhealthy".into());
+    assert_eq!(ui.get_wsl_status(), "Unhealthy");
+
     // -- set/get containers-status --
     ui.set_containers_status("3 running".into());
     assert_eq!(ui.get_containers_status(), "3 running");
@@ -130,6 +136,9 @@ fn ui_property_defaults() {
             selected: false,
             base_image_index: 0,
             has_custom_dockerfile: false,
+            deployed: false,
+            pod_failed: false,
+            ambiguous: false,
         },
         ProjectEntry {
             name: "backend".into(),
@@ -137,6 +146,9 @@ fn ui_property_defaults() {
             selected: true,
             base_image_index: 2,
             has_custom_dockerfile: true,
+            deployed: false,
+            pod_failed: false,
+            ambiguous: false,
         },
     ];
     let model = std::rc::Rc::new(slint::VecModel::from(entries));
@@ -196,6 +208,7 @@ fn ui_property_defaults() {
             exposed: false,
             container_port: 0,
             selected: false,
+            remote_control: false,
         },
         PodEntry {
             name: "claude-backend-def".into(),
@@ -208,6 +221,7 @@ fn ui_property_defaults() {
             exposed: false,
             container_port: 0,
             selected: false,
+            remote_control: false,
         },
     ];
     let pod_model = std::rc::Rc::new(slint::VecModel::from(pod_entries));
@@ -270,7 +284,7 @@ fn ui_property_defaults() {
     ui.on_helm_status(|| {});
     ui.on_save_settings(|| {});
     ui.on_exec_claude(|_idx| {});
-    ui.on_send_prompt(|_prompt| {});
+    ui.on_shell_pod(|_idx| {});
     ui.on_install_missing(|| {});
     ui.on_continue_app(|| {});
 
@@ -406,12 +420,12 @@ fn ui_property_defaults() {
     ui.invoke_exec_claude(2);
     assert_eq!(received_idx.get(), 2);
 
-    // send_prompt
-    let received_prompt = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-    let p = received_prompt.clone();
-    ui.on_send_prompt(move |prompt| { *p.borrow_mut() = prompt.to_string(); });
-    ui.invoke_send_prompt("hello claude".into());
-    assert_eq!(*received_prompt.borrow(), "hello claude");
+    // shell_pod
+    let received_idx = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+    let i = received_idx.clone();
+    ui.on_shell_pod(move |idx| { i.set(idx); });
+    ui.invoke_shell_pod(5);
+    assert_eq!(received_idx.get(), 5);
 
     // install_missing
     let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
@@ -426,4 +440,234 @@ fn ui_property_defaults() {
     ui.on_continue_app(move || { c.set(c.get() + 1); });
     ui.invoke_continue_app();
     assert_eq!(counter.get(), 1);
+
+    // -- new bulk action callbacks (no panic) --
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_redeploy_selected(move || { c.set(c.get() + 1); });
+    ui.invoke_redeploy_selected();
+    assert_eq!(counter.get(), 1);
+
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_expose_selected(move || { c.set(c.get() + 1); });
+    ui.invoke_expose_selected();
+    assert_eq!(counter.get(), 1);
+
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_unexpose_selected(move || { c.set(c.get() + 1); });
+    ui.invoke_unexpose_selected();
+    assert_eq!(counter.get(), 1);
+
+    // -- selected_pod_names property --
+    ui.set_selected_pod_names("frontend, backend".into());
+    assert_eq!(ui.get_selected_pod_names(), "frontend, backend");
+    ui.set_selected_pod_names("".into());
+    assert_eq!(ui.get_selected_pod_names(), "");
+
+    // -- selected_pod_count and all_pods_selected --
+    ui.set_selected_pod_count(3);
+    assert_eq!(ui.get_selected_pod_count(), 3);
+    ui.set_all_pods_selected(true);
+    assert!(ui.get_all_pods_selected());
+    ui.set_all_pods_selected(false);
+    assert!(!ui.get_all_pods_selected());
+
+    // -- PodEntry selected field updates through model --
+    let pod_entries = vec![
+        PodEntry {
+            name: "pod-1".into(),
+            project: "proj-a".into(),
+            phase: "Running".into(),
+            ready: true,
+            restart_count: 0,
+            age: "5m".into(),
+            warnings: "".into(),
+            exposed: false,
+            container_port: 3000,
+            selected: false,
+            remote_control: false,
+        },
+        PodEntry {
+            name: "pod-2".into(),
+            project: "proj-b".into(),
+            phase: "Running".into(),
+            ready: true,
+            restart_count: 0,
+            age: "10m".into(),
+            warnings: "".into(),
+            exposed: true,
+            container_port: 8080,
+            selected: true,
+            remote_control: false,
+        },
+    ];
+    let pod_model = std::rc::Rc::new(slint::VecModel::from(pod_entries));
+    ui.set_pods(pod_model.into());
+
+    let pods = ui.get_pods();
+    assert!(!pods.row_data(0).unwrap().selected, "pod-1 should start unselected");
+    assert!(pods.row_data(1).unwrap().selected, "pod-2 should start selected");
+    assert!(pods.row_data(1).unwrap().exposed, "pod-2 should be exposed");
+    assert_eq!(pods.row_data(1).unwrap().container_port, 8080);
+
+    // Toggle selection on pod-1
+    let mut p0 = pods.row_data(0).unwrap();
+    p0.selected = true;
+    pods.set_row_data(0, p0);
+    assert!(pods.row_data(0).unwrap().selected, "pod-1 should now be selected");
+
+    // -- pod_toggled callback with arguments --
+    let received_idx = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+    let received_checked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let i = received_idx.clone();
+    let ch = received_checked.clone();
+    ui.on_pod_toggled(move |idx, checked| { i.set(idx); ch.set(checked); });
+    ui.invoke_pod_toggled(1, true);
+    assert_eq!(received_idx.get(), 1);
+    assert!(received_checked.get());
+
+    // -- toggle_select_all_pods --
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_toggle_select_all_pods(move |_checked| { c.set(c.get() + 1); });
+    ui.invoke_toggle_select_all_pods(true);
+    assert_eq!(counter.get(), 1);
+
+    // -- delete_selected_pods --
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = counter.clone();
+    ui.on_delete_selected_pods(move || { c.set(c.get() + 1); });
+    ui.invoke_delete_selected_pods();
+    assert_eq!(counter.get(), 1);
+
+    // -- toggle_network --
+    let received_idx = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+    let i = received_idx.clone();
+    ui.on_toggle_network(move |idx| { i.set(idx); });
+    ui.invoke_toggle_network(3);
+    assert_eq!(received_idx.get(), 3);
+
+    // -- pod-log property --
+    ui.set_pod_log("Container started\nListening on :8080".into());
+    assert_eq!(ui.get_pod_log(), "Container started\nListening on :8080");
+    ui.set_pod_log("".into());
+    assert_eq!(ui.get_pod_log(), "");
+
+    // -- node_status, helm_release_status --
+    ui.set_node_status("1 Ready".into());
+    assert_eq!(ui.get_node_status(), "1 Ready");
+    ui.set_helm_release_status("deployed".into());
+    assert_eq!(ui.get_helm_release_status(), "deployed");
+
+    // -- memory_usage_text, cluster_memory_info --
+    ui.set_memory_usage_text("2.1 GB of 8.0 GB".into());
+    assert_eq!(ui.get_memory_usage_text(), "2.1 GB of 8.0 GB");
+    ui.set_cluster_memory_info("4.0 GB of 16.0 GB".into());
+    assert_eq!(ui.get_cluster_memory_info(), "4.0 GB of 16.0 GB");
+
+    // -- cluster_memory_percent --
+    ui.set_cluster_memory_percent("50".into());
+    assert_eq!(ui.get_cluster_memory_percent(), "50");
+
+    // -- launch_steps model --
+    let steps = vec![
+        LaunchStep {
+            label: "Build Images".into(),
+            status: "done".into(),
+            message: "Built 3 images".into(),
+        },
+        LaunchStep {
+            label: "Import to Cluster".into(),
+            status: "running".into(),
+            message: "Importing...".into(),
+        },
+        LaunchStep {
+            label: "Helm Deploy".into(),
+            status: "pending".into(),
+            message: "".into(),
+        },
+    ];
+    let step_model = std::rc::Rc::new(slint::VecModel::from(steps));
+    ui.set_launch_steps(step_model.into());
+
+    let launch_steps = ui.get_launch_steps();
+    assert_eq!(launch_steps.row_count(), 3);
+    assert_eq!(launch_steps.row_data(0).unwrap().label, "Build Images");
+    assert_eq!(launch_steps.row_data(0).unwrap().status, "done");
+    assert_eq!(launch_steps.row_data(1).unwrap().status, "running");
+    assert_eq!(launch_steps.row_data(2).unwrap().status, "pending");
+
+    // -- update step status --
+    let mut step1 = launch_steps.row_data(1).unwrap();
+    step1.status = "done".into();
+    step1.message = "Imported 3 images".into();
+    launch_steps.set_row_data(1, step1);
+    assert_eq!(launch_steps.row_data(1).unwrap().status, "done");
+
+    // -- shell_pod callback --
+    let received_idx = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+    let i = received_idx.clone();
+    ui.on_shell_pod(move |idx| { i.set(idx); });
+    ui.invoke_shell_pod(3);
+    assert_eq!(received_idx.get(), 3);
+
+    // -- PodEntry remote_control field --
+    let rc_pods = vec![
+        PodEntry {
+            name: "rc-pod-1".into(),
+            project: "proj".into(),
+            phase: "Running".into(),
+            ready: true,
+            restart_count: 0,
+            age: "5m".into(),
+            warnings: "".into(),
+            exposed: false,
+            container_port: 0,
+            selected: false,
+            remote_control: false,
+        },
+        PodEntry {
+            name: "rc-pod-2".into(),
+            project: "proj".into(),
+            phase: "Running".into(),
+            ready: true,
+            restart_count: 0,
+            age: "5m".into(),
+            warnings: "".into(),
+            exposed: false,
+            container_port: 0,
+            selected: false,
+            remote_control: true,
+        },
+    ];
+    let rc_model = std::rc::Rc::new(slint::VecModel::from(rc_pods));
+    ui.set_pods(rc_model.into());
+    let rc_result = ui.get_pods();
+    assert!(!rc_result.row_data(0).unwrap().remote_control, "pod-1 remote_control should be false");
+    assert!(rc_result.row_data(1).unwrap().remote_control, "pod-2 remote_control should be true");
+
+    // Toggle remote_control via model update
+    let mut rc_p = rc_result.row_data(0).unwrap();
+    rc_p.remote_control = true;
+    rc_result.set_row_data(0, rc_p);
+    assert!(rc_result.row_data(0).unwrap().remote_control, "pod-1 remote_control should now be true");
+
+    // -- toggle_select_all_pods receives bool --
+    let received_checked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let ch = received_checked.clone();
+    ui.on_toggle_select_all_pods(move |checked| { ch.set(checked); });
+    ui.invoke_toggle_select_all_pods(true);
+    assert!(received_checked.get(), "should receive true");
+    ui.invoke_toggle_select_all_pods(false);
+    assert!(!received_checked.get(), "should receive false");
+
+    // -- active_page navigation --
+    ui.set_active_page(0);
+    assert_eq!(ui.get_active_page(), 0);
+    ui.set_active_page(2);
+    assert_eq!(ui.get_active_page(), 2);
+    ui.set_active_page(3);
+    assert_eq!(ui.get_active_page(), 3);
 }

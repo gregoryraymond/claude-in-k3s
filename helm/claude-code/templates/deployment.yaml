@@ -1,62 +1,70 @@
-{{- range .Values.projects }}
----
+{{- if .Values.project.name }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: claude-{{ include "claude-code.projectName" .name }}
-  namespace: {{ $.Values.namespace }}
+  name: claude-{{ include "claude-code.projectName" .Values.project.name }}
+  namespace: {{ .Values.namespace }}
   labels:
-    {{- include "claude-code.labels" $ | nindent 4 }}
+    {{- include "claude-code.labels" . | nindent 4 }}
     app.kubernetes.io/component: claude-pod
-    claude-code/project: {{ include "claude-code.projectName" .name }}
+    claude-code/project: {{ include "claude-code.projectName" .Values.project.name }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "claude-code.name" $ }}
-      claude-code/project: {{ include "claude-code.projectName" .name }}
+      app.kubernetes.io/name: {{ include "claude-code.name" . }}
+      claude-code/project: {{ include "claude-code.projectName" .Values.project.name }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "claude-code.name" $ }}
-        claude-code/project: {{ include "claude-code.projectName" .name }}
+        app.kubernetes.io/name: {{ include "claude-code.name" . }}
+        claude-code/project: {{ include "claude-code.projectName" .Values.project.name }}
       annotations:
-        claude-code/project-path: {{ .path | quote }}
+        claude-code/project-path: {{ .Values.project.path | quote }}
     spec:
-      serviceAccountName: {{ include "claude-code.fullname" $ }}
+      serviceAccountName: {{ include "claude-code.fullname" . }}
       containers:
         - name: claude-code
-          image: {{ default (printf "%s:%s" $.Values.image.repository $.Values.image.tag) .image | quote }}
-          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          image: {{ default (printf "%s:%s" .Values.image.repository .Values.image.tag) .Values.project.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: CLAUDE_MODE
-              value: {{ default $.Values.claude.mode .mode | quote }}
+              value: {{ .Values.claude.mode | quote }}
             - name: CLAUDE_PROMPT
-              value: {{ default $.Values.claude.prompt .prompt | quote }}
+              value: {{ .Values.claude.prompt | quote }}
           envFrom:
             - configMapRef:
-                name: {{ include "claude-code.fullname" $ }}-config
+                name: {{ include "claude-code.fullname" . }}-config
+            - secretRef:
+                name: env-{{ include "claude-code.projectName" .Values.project.name }}
+                optional: true
           volumeMounts:
             - name: project-volume
               mountPath: /workspace
-            {{- if $.Values.claude.credentialsPath }}
+            - name: claude-home
+              mountPath: /claude-data
+            {{- if .Values.claude.credentialsPath }}
             - name: claude-credentials
-              mountPath: /home/claude/.claude
+              mountPath: /claude-host
               readOnly: true
             {{- end }}
+            {{- range $i, $mount := .Values.extraMounts }}
+            - name: extra-mount-{{ $i }}
+              mountPath: /mnt/extra-{{ $i }}
+            {{- end }}
           resources:
-            {{- toYaml $.Values.resources | nindent 12 }}
-          {{- if $.Values.healthCheck.enabled }}
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.healthCheck.enabled }}
           livenessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - "ps aux 2>/dev/null | grep -q '[t]ail -f' || ps aux 2>/dev/null | grep -q '[c]laude' || exit 1"
-            initialDelaySeconds: {{ $.Values.healthCheck.initialDelaySeconds }}
-            periodSeconds: {{ $.Values.healthCheck.periodSeconds }}
-            timeoutSeconds: {{ $.Values.healthCheck.timeoutSeconds }}
-            failureThreshold: {{ $.Values.healthCheck.failureThreshold }}
+                - "test -d /proc/1 || exit 1"
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.failureThreshold }}
           readinessProbe:
             exec:
               command:
@@ -69,19 +77,27 @@ spec:
       volumes:
         - name: project-volume
           hostPath:
-            path: {{ .path }}
+            path: {{ .Values.project.path }}
             type: Directory
-        {{- if $.Values.claude.credentialsPath }}
+        - name: claude-home
+          emptyDir: {}
+        {{- if .Values.claude.credentialsPath }}
         - name: claude-credentials
           hostPath:
-            path: {{ $.Values.claude.credentialsPath }}
+            path: {{ .Values.claude.credentialsPath }}
             type: Directory
         {{- end }}
-      {{- with $.Values.nodeSelector }}
+        {{- range $i, $mount := .Values.extraMounts }}
+        - name: extra-mount-{{ $i }}
+          hostPath:
+            path: {{ $mount }}
+            type: DirectoryOrCreate
+        {{- end }}
+      {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with $.Values.tolerations }}
+      {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

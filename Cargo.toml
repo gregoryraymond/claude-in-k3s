@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/ck3-logging"]
+
 [package]
 name = "claude-in-k3s"
 version = "0.1.0"
@@ -7,6 +10,7 @@ license = "MIT"
 build = "build.rs"
 
 [dependencies]
+ck3-logging = { path = "crates/ck3-logging" }
 slint = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,7 +22,6 @@ rfd = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.33"
 tray-icon = "0.19"
 ctrlc = "3"

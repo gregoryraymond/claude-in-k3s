@@ -43,10 +43,9 @@ impl TrayState {
     }
 
     pub fn update_status(&self, cluster_status: &str, pod_count: usize) {
-        let _ = self
-            .cluster_item
+        self.cluster_item
             .set_text(format!("Cluster: {}", cluster_status));
-        let _ = self.pods_item.set_text(format!("Pods: {}", pod_count));
+        self.pods_item.set_text(format!("Pods: {}", pod_count));
     }
 }
 

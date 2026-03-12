@@ -4,7 +4,7 @@ import { IconButton } from "icon-button.slint";
 import { StatusBadge } from "status-badge.slint";
 import { DataRow } from "data-row.slint";
 import { LogViewer } from "log-viewer.slint";
-import { ScrollView, LineEdit, CheckBox } from "std-widgets.slint";
+import { ScrollView, CheckBox } from "std-widgets.slint";
 
 export struct PodEntry {
     name: string,
@@ -17,6 +17,7 @@ export struct PodEntry {
     exposed: bool,
     container-port: int,
     selected: bool,
+    remote-control: bool,
 }
 
 export component PodsPanel inherits Rectangle {
@@ -28,16 +29,14 @@ export component PodsPanel inherits Rectangle {
     callback delete-pod(int);
     callback view-logs(int);
     callback exec-claude(int);
+    callback shell-pod(int);
     callback toggle-network(int);
-    callback send-prompt(string);
     callback pod-toggled(int, bool);
-    callback toggle-select-all-pods();
+    callback toggle-select-all-pods(bool);
     callback delete-selected-pods();
     callback redeploy-selected();
     callback expose-selected();
     callback unexpose-selected();
-    in-out property <string> claude-prompt: "";
-    in property <string> claude-target-pod: "";
     in property <bool> all-pods-selected: false;
     in property <int> selected-pod-count: 0;
     in property <string> selected-names: "";
@@ -72,57 +71,73 @@ export component PodsPanel inherits Rectangle {
             background: Theme.surface-alt;
             border-radius: 6px;
             border-width: 1px;
-            border-color: Theme.border;
-            height: 40px;
+            border-color: Theme.accent;
 
             HorizontalLayout {
-                spacing: 8px;
                 padding-left: 12px;
-                padding-right: 12px;
-                alignment: start;
+                padding-right: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 8px;
+                alignment: space-between;
 
-                Text {
-                    text: selected-pod-count + " selected";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Theme.text;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: selected-pod-count + " selected";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "(" + root.selected-names + ")";
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        max-width: 300px;
+                    }
                 }
 
-                Rectangle { width: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    spacing: 4px;
 
-                IconButton {
-                    icon-source: @image-url("../icons/redeploy.svg");
-                    compact: true;
-                    tooltip: "Redeploy";
-                    enabled: !is-busy;
-                    clicked => { root.redeploy-selected(); }
-                }
+                    IconButton {
+                        icon-source: @image-url("../icons/redeploy.svg");
+                        compact: true;
+                        tooltip: "Redeploy";
+                        enabled: !is-busy;
+                        clicked => { root.redeploy-selected(); }
+                    }
 
-                IconButton {
-                    icon-source: @image-url("../icons/network.svg");
-                    compact: true;
-                    tooltip: "Expose";
-                    enabled: !is-busy;
-                    clicked => { root.expose-selected(); }
-                }
+                    IconButton {
+                        icon-source: @image-url("../icons/network.svg");
+                        compact: true;
+                        tooltip: "Expose";
+                        enabled: !is-busy;
+                        clicked => { root.expose-selected(); }
+                    }
 
-                IconButton {
-                    icon-source: @image-url("../icons/network.svg");
-                    compact: true;
-                    tooltip: "Unexpose";
-                    enabled: !is-busy;
-                    primary: true;
-                    clicked => { root.unexpose-selected(); }
-                }
+                    IconButton {
+                        icon-source: @image-url("../icons/network.svg");
+                        compact: true;
+                        tooltip: "Unexpose";
+                        primary: true;
+                        enabled: !is-busy;
+                        clicked => { root.unexpose-selected(); }
+                    }
 
-                IconButton {
-                    icon-source: @image-url("../icons/delete.svg");
-                    compact: true;
-                    destructive: true;
-                    tooltip: "Delete";
-                    enabled: !is-busy;
-                    clicked => { root.delete-selected-pods(); }
+                    IconButton {
+                        icon-source: @image-url("../icons/delete.svg");
+                        compact: true;
+                        tooltip: "Delete";
+                        destructive: true;
+                        enabled: !is-busy;
+                        clicked => { root.delete-selected-pods(); }
+                    }
                 }
             }
         }
@@ -137,7 +152,7 @@ export component PodsPanel inherits Rectangle {
             CheckBox {
                 width: 28px;
                 checked: root.all-pods-selected;
-                toggled => { root.toggle-select-all-pods(); }
+                toggled => { root.toggle-select-all-pods(self.checked); }
             }
 
             Text { text: "Project"; font-weight: 600; horizontal-stretch: 1; font-size: 11px; color: Theme.text-muted; vertical-alignment: center; }
@@ -145,7 +160,9 @@ export component PodsPanel inherits Rectangle {
             Text { text: "Ready"; font-weight: 600; width: 44px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
             Text { text: "Restarts"; font-weight: 600; width: 54px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
             Text { text: "Age"; font-weight: 600; width: 72px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
-            Text { text: "Actions"; font-weight: 600; width: 132px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Warnings"; font-weight: 600; width: 120px; font-size: 11px; color: Theme.text-muted; vertical-alignment: center; }
+            Text { text: "Port"; font-weight: 600; width: 64px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Actions"; font-weight: 600; width: 164px; font-size: 11px; color: Theme.text-muted; horizontal-alignment: center; vertical-alignment: center; }
         }
 
         Rectangle { height: 1px; background: Theme.border; }
@@ -217,8 +234,26 @@ export component PodsPanel inherits Rectangle {
                             overflow: elide;
                         }
 
+                        Text {
+                            text: pod.warnings;
+                            width: 120px;
+                            font-size: 11px;
+                            color: pod.warnings != "" ? Theme.warning : Theme.text-muted;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: pod.exposed && pod.container-port > 0 ? ":" + pod.container-port : pod.exposed ? "exposed" : "-";
+                            width: 64px;
+                            font-size: 12px;
+                            color: pod.exposed ? Theme.success : Theme.text-muted;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+
                         HorizontalLayout {
-                            width: 132px;
+                            width: 164px;
                             spacing: 4px;
                             alignment: center;
 
@@ -230,9 +265,17 @@ export component PodsPanel inherits Rectangle {
                             }
 
                             IconButton {
+                                icon-source: @image-url("../icons/terminal.svg");
+                                compact: true;
+                                tooltip: "Claude Code";
+                                clicked => { root.shell-pod(idx); }
+                            }
+
+                            IconButton {
                                 icon-source: @image-url("../icons/claude-icon.svg");
                                 compact: true;
-                                tooltip: "Claude";
+                                tooltip: pod.remote-control ? "Stop Remote Control" : "Start Remote Control";
+                                active: pod.remote-control;
                                 clicked => { root.exec-claude(idx); }
                             }
 
@@ -240,7 +283,7 @@ export component PodsPanel inherits Rectangle {
                                 icon-source: @image-url("../icons/network.svg");
                                 compact: true;
                                 tooltip: pod.exposed ? "Unexpose" : "Expose";
-                                primary: pod.exposed;
+                                active: pod.exposed;
                                 clicked => { root.toggle-network(idx); }
                             }
 
@@ -257,35 +300,8 @@ export component PodsPanel inherits Rectangle {
             }
         }
 
-        if claude-target-pod != "" : HorizontalLayout {
-            spacing: 8px;
-            height: 36px;
-
-            Text {
-                text: "Prompt for " + claude-target-pod + ":";
-                font-size: 12px;
-                color: Theme.text-muted;
-                vertical-alignment: center;
-            }
-
-            LineEdit {
-                text <=> root.claude-prompt;
-                placeholder-text: "Enter a prompt for Claude...";
-                horizontal-stretch: 1;
-                font-size: 13px;
-            }
-
-            IconButton {
-                label: "Send";
-                primary: true;
-                enabled: claude-prompt != "";
-                clicked => { root.send-prompt(claude-prompt); }
-            }
-        }
-
         if pod-log != "" : LogViewer {
             text: pod-log;
-            min-height: 180px;
             vertical-stretch: 1;
         }
 

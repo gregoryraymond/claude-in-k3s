@@ -1,0 +1,29 @@
+{{- if .Values.project.name }}
+# NET-2: Default deny ingress between Claude pods for isolation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.project.name }}-isolation
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: claude-code
+      project: {{ .Values.project.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow ingress only from same project's pods (self-talk)
+    - from:
+        - podSelector:
+            matchLabels:
+              project: {{ .Values.project.name }}
+    # Allow ingress from Traefik ingress controller for exposed services
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+{{- end }}

@@ -50,10 +50,25 @@ The app detects missing tools (K3s, Terraform, Helm, Docker) and installs them f
 Point it at a directory. It finds your projects, detects the language (Node, Python, Rust, Go, .NET), picks the right base image, and builds Docker containers automatically.
 
 ### Live Pod Management
-Watch pods come up in real time. Tail logs. Send prompts to Claude directly from the app. Delete pods when you're done. Everything in one window.
+Watch pods come up in real time. Tail logs with auto-scroll. Send prompts to Claude directly from the app. Delete pods when you're done. Everything in one window.
+
+### Pod Actions
+Compact icon buttons on each pod row — view logs, send prompts, expose to network, redeploy, or delete. Tooltips explain each action.
+
+### Network Exposure
+One-click Service + Ingress creation. Exposes any pod's HTTP port at `{project}.localhost` for easy browser access.
 
 </td>
 <td width="50%">
+
+### Bulk Operations
+Select individual pods or "select all", then redeploy, expose, unexpose, or delete in bulk. A floating action bar shows when pods are selected.
+
+### Log Viewer
+Auto-scroll toggle, previous-container crash logs, and automatic fallback to `kubectl describe` when containers haven't started yet.
+
+### Redeploy
+Re-apply the Helm chart for selected pods without rebuilding Docker images. Useful for picking up config changes quickly.
 
 ### Resource Controls
 Set CPU and memory limits per pod. Claude gets what you give it — no runaway processes eating your machine.
@@ -132,6 +147,50 @@ Head to **Settings** and enter:
 
 ---
 
+## Pod Management
+
+Once your pods are running, the **Pods tab** provides a full management interface.
+
+### Icon Button Actions
+
+Each pod row has compact icon buttons for quick actions:
+
+| Icon | Action | Description |
+|------|--------|-------------|
+| Log | **View Logs** | Opens the log viewer for that pod |
+| Claude | **Send Prompt** | Opens the Claude prompt interface |
+| Network | **Expose** | Creates a Service + Ingress for browser access |
+| Redeploy | **Redeploy** | Re-applies the Helm chart without rebuilding |
+| Delete | **Delete** | Removes the pod from the cluster |
+
+### Network Exposure
+
+Click the **Expose** button on a pod to:
+1. Auto-detect the listening port inside the container (falls back to 8080)
+2. Create a Kubernetes **Service** routing traffic to that port
+3. Create an **Ingress** rule at `{project}.localhost`
+
+Browse to `http://your-project.localhost` to reach the running app. Click **Unexpose** to tear down the Service and Ingress.
+
+### Selection and Bulk Actions
+
+- Click the checkbox on individual pods, or use **Select All**
+- A floating action bar appears showing the count and names of selected pods
+- Bulk actions: **Redeploy Selected**, **Expose Selected**, **Unexpose Selected**, **Delete Selected**
+
+### Log Viewer
+
+- Streams the latest logs with configurable tail length
+- **Auto-scroll** toggle keeps the view pinned to the bottom
+- If the container has restarted, previous container logs are shown above current logs with a separator
+- Falls back to `kubectl describe` output when containers haven't started yet
+
+### Redeploy
+
+Redeploy re-runs the Helm upgrade for selected pods without rebuilding Docker images. This is useful when you've changed Helm values (API keys, resource limits, environment variables) and want to pick up those changes quickly.
+
+---
+
 ## Configuration
 
 Settings persist in `~/.config/claude-in-k3s/config.toml`:
@@ -164,18 +223,24 @@ claude-in-k3s/
 │   ├── deps.rs            Dependency detection and auto-install
 │   ├── docker.rs          Docker image builder
 │   ├── error.rs           Error types and command results
+│   ├── health.rs          Background health-check polling
 │   ├── helm.rs            Helm chart deployment
 │   ├── kubectl.rs         Pod management and Claude interaction
 │   ├── platform.rs        Cross-platform detection (Linux/macOS/WSL2/Windows)
 │   ├── projects.rs        Project scanning and language detection
-│   └── terraform.rs       Terraform lifecycle management
+│   ├── recovery.rs        Cluster failure diagnosis and auto-recovery
+│   ├── terraform.rs       Terraform lifecycle management
+│   └── tray.rs            System tray integration
 │
 ├── ui/
 │   ├── app-window.slint           Root window with tab navigation
+│   ├── icons/                     SVG icons for pod actions and navigation
 │   └── components/
 │       ├── cluster-panel.slint    Terraform + Helm controls
+│       ├── icon-button.slint      Reusable icon button with tooltip
+│       ├── log-viewer.slint       Log display with auto-scroll toggle
 │       ├── projects-panel.slint   Project browser and launcher
-│       ├── pods-panel.slint       Pod monitor and prompt interface
+│       ├── pods-panel.slint       Pod monitor, actions, and bulk operations
 │       ├── settings-panel.slint   Configuration form
 │       └── setup-panel.slint     First-run dependency installer
 │

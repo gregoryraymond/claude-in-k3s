@@ -9,8 +9,11 @@ export struct ProjectEntry {
     name: string,
     path: string,
     selected: bool,
+    deployed: bool,
     base-image-index: int,
     has-custom-dockerfile: bool,
+    pod-failed: bool,
+    ambiguous: bool,
 }
 
 export struct LaunchTab {
@@ -44,6 +47,7 @@ export component ProjectsPanel inherits Rectangle {
     callback toggle-select-all();
     callback project-toggled(int, bool);
     callback project-image-changed(int, int);
+    callback retry-build(string);
 
     background: Theme.bg;
 
@@ -122,8 +126,28 @@ export component ProjectsPanel inherits Rectangle {
                             CheckBox {
                                 text: project.name;
                                 checked: project.selected;
+                                enabled: !project.deployed;
                                 horizontal-stretch: 1;
                                 toggled => { root.project-toggled(idx, self.checked); }
+                            }
+
+                            if project.deployed && !project.pod-failed : Text {
+                                text: "deployed";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.success;
+                                vertical-alignment: center;
+                                min-width: 60px;
+                            }
+
+                            // POD-65: Show "failed" badge when pod is in CrashLoopBackOff
+                            if project.deployed && project.pod-failed : Text {
+                                text: "failed";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.error;
+                                vertical-alignment: center;
+                                min-width: 60px;
                             }
 
                             ComboBox {
@@ -131,6 +155,14 @@ export component ProjectsPanel inherits Rectangle {
                                 current-index: project.base-image-index;
                                 width: 120px;
                                 selected(value) => { root.project-image-changed(idx, self.current-index); }
+                            }
+
+                            // PRJ-61: Ambiguity warning when multiple language markers detected
+                            if project.ambiguous : Text {
+                                text: "⚠ multiple languages";
+                                font-size: 10px;
+                                color: Theme.warning;
+                                vertical-alignment: center;
                             }
 
                             Text {
@@ -274,7 +306,7 @@ export component ProjectsPanel inherits Rectangle {
                                 Rectangle {
                                     width: 10px;
                                     height: 10px;
-                                    y: 13px;
+                                    y: 12px;
                                     border-radius: 5px;
                                     background: step.status == "done" ? Theme.success :
                                                 step.status == "running" ? Theme.warning :
@@ -311,6 +343,30 @@ export component ProjectsPanel inherits Rectangle {
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;
+                                }
+
+                                // PRJ-53: Retry button for failed build steps
+                                if step.status == "failed" && step.message != "Cancelled" : Rectangle {
+                                    width: 60px;
+                                    height: 24px;
+                                    background: retry-ta.has-hover ? Theme.accent : Theme.surface-alt;
+                                    border-radius: 4px;
+                                    border-width: 1px;
+                                    border-color: Theme.accent;
+
+                                    retry-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.retry-build(step.label); }
+                                    }
+
+                                    Text {
+                                        text: "Retry";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: retry-ta.has-hover ? Theme.bg : Theme.accent;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }

@@ -1,29 +1,27 @@
-ARG BASE_IMAGE=node:22-bookworm-slim
+ARG BASE_IMAGE
 
 FROM ${BASE_IMAGE}
 
-# Install common tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    jq \
-    ca-certificates \
-    openssh-client \
-    && rm -rf /var/lib/apt/lists/*
+# Install curl + ca-certificates if missing (needed for Claude Code installer)
+RUN if ! command -v curl >/dev/null 2>&1; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            curl ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
-# Ensure a user with UID 1000 exists (some base images already have one)
+# Ensure a user with UID 1000 exists
 RUN if ! id -u 1000 >/dev/null 2>&1; then \
         useradd -m -s /bin/bash -u 1000 claude; \
     fi
 
 # Install Claude Code via native installer and copy to a global path
+USER root
 RUN bash -c 'set -e && \
     curl -fsSL https://claude.ai/install.sh | bash && \
     source ~/.bashrc 2>/dev/null || true && \
     CLAUDE_BIN=$(which claude 2>/dev/null || \
         find / -maxdepth 8 -name "claude" \( -type f -o -type l \) -executable \
             -not -path "*/downloads/*" 2>/dev/null | head -1) && \
-    echo "Found claude at: $CLAUDE_BIN" && \
     if [ -n "$CLAUDE_BIN" ] && [ "$CLAUDE_BIN" != "/usr/local/bin/claude" ]; then \
         cp -L "$CLAUDE_BIN" /usr/local/bin/claude && chmod +x /usr/local/bin/claude; \
     fi && \
@@ -34,18 +32,3 @@ RUN bash -c 'USER_HOME=$(eval echo "~$(id -nu 1000)") && \
     mkdir -p "$USER_HOME/.claude" && \
     echo '"'"'{"hasCompletedOnboarding": true, "projects": {"/workspace": {"allowedTools": [], "hasTrustDialogAccepted": true}}}'"'"' > "$USER_HOME/.claude.json" && \
     chown -R 1000:1000 "$USER_HOME/.claude" "$USER_HOME/.claude.json"'
-
-# Create workspace mount point
-RUN mkdir -p /workspace && chown 1000:1000 /workspace
-
-# Copy entrypoint
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-USER 1000
-WORKDIR /workspace
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD claude --version || exit 1
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
